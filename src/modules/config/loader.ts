@@ -6,6 +6,19 @@ import { z } from "zod";
 export const PROFILES = ["development", "simulation", "evaluation", "personal", "offline"] as const;
 export type Profile = (typeof PROFILES)[number];
 
+export interface ProfileCapabilities {
+  readonly allowNetworkEgress: boolean;
+  readonly allowChildProcesses: boolean;
+}
+
+export const PROFILE_CAPABILITIES: Readonly<Record<Profile, ProfileCapabilities>> = {
+  offline: { allowNetworkEgress: false, allowChildProcesses: false },
+  evaluation: { allowNetworkEgress: false, allowChildProcesses: false },
+  simulation: { allowNetworkEgress: false, allowChildProcesses: true },
+  development: { allowNetworkEgress: true, allowChildProcesses: true },
+  personal: { allowNetworkEgress: true, allowChildProcesses: true },
+};
+
 const sessionConfigSchema = z.object({
   profile: z.enum(PROFILES),
   appName: z.string().min(1),
@@ -141,15 +154,16 @@ export function loadSessionConfig(
 }
 
 function applyProfileGuards(config: SessionConfig): Result<SessionConfig, AppError> {
-  if (config.profile === "offline") {
-    if (config.allowNetworkEgress || config.allowChildProcesses) {
-      return err(
-        appError("CONFIG_INVALID", "profile 'offline' cannot grant egress or child processes"),
-      );
-    }
+  const ceiling = PROFILE_CAPABILITIES[config.profile];
+  if (config.allowNetworkEgress && !ceiling.allowNetworkEgress) {
+    return err(
+      appError("CONFIG_INVALID", `profile '${config.profile}' cannot grant network egress`),
+    );
   }
-  if (config.profile === "evaluation" && config.allowNetworkEgress) {
-    return err(appError("CONFIG_INVALID", "profile 'evaluation' cannot grant network egress"));
+  if (config.allowChildProcesses && !ceiling.allowChildProcesses) {
+    return err(
+      appError("CONFIG_INVALID", `profile '${config.profile}' cannot grant child processes`),
+    );
   }
   return ok(config);
 }

@@ -35,7 +35,7 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_SUBSTRINGS.some((part) => normalized.includes(part));
 }
 
-/** Name-based redaction only: values under unrecognized keys pass through, so callers must not log raw payloads. */
+/** [security] Name-based redaction only: values under unrecognized keys pass through, so callers must not log raw payloads. */
 export function sanitizeFields(
   fields: Readonly<Record<string, unknown>>,
 ): Record<string, LogFieldValue> {

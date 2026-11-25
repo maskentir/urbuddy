@@ -27,7 +27,7 @@ describe("config loader", () => {
   it("applies env under flags (flags > env > defaults)", () => {
     const result = loadSessionConfig({
       env: {
-        URBUDDY_PROFILE: "simulation",
+        URBUDDY_PROFILE: "development",
         URBUDDY_LOG_LEVEL: "debug",
         URBUDDY_DATA_ROOT: "/env-data",
         URBUDDY_ALLOW_EGRESS: "1",
@@ -39,7 +39,7 @@ describe("config loader", () => {
     if (result.isErr()) {
       throw new Error("env config must load");
     }
-    expect(result.value.profile).toBe("simulation");
+    expect(result.value.profile).toBe("development");
     expect(result.value.logLevel).toBe("warn");
     expect(result.value.dataRootOverride).toBe("/env-data");
     expect(result.value.allowNetworkEgress).toBe(true);
@@ -52,26 +52,203 @@ describe("config loader", () => {
     expect(loadSessionConfig({ flags: { logLevel: "verbose" } }).isErr()).toBe(true);
   });
 
-  it("profiles never bypass permissions", () => {
-    const offline = loadSessionConfig({
-      env: {},
-      flags: { profile: "offline", allowNetworkEgress: true },
-    });
-    expect(offline.isErr()).toBe(true);
-    const evaluation = loadSessionConfig({
-      env: {},
-      flags: { profile: "evaluation", allowNetworkEgress: true },
-    });
-    expect(evaluation.isErr()).toBe(true);
-    const offlineClean = loadSessionConfig({ env: {}, flags: { profile: "offline" } });
-    expect(offlineClean.isOk()).toBe(true);
+  it("profile ceilings agree across config validation and effective grants", () => {
+    const rows: ReadonlyArray<{
+      readonly profile: "offline" | "evaluation" | "simulation" | "development" | "personal";
+      readonly egress: boolean;
+      readonly child: boolean;
+      readonly configOk: boolean;
+      readonly effectiveEgress: boolean;
+      readonly effectiveChild: boolean;
+    }> = [
+      {
+        profile: "offline",
+        egress: false,
+        child: false,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "offline",
+        egress: true,
+        child: false,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "offline",
+        egress: false,
+        child: true,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "offline",
+        egress: true,
+        child: true,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "evaluation",
+        egress: false,
+        child: false,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "evaluation",
+        egress: true,
+        child: false,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "evaluation",
+        egress: false,
+        child: true,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "evaluation",
+        egress: true,
+        child: true,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "simulation",
+        egress: false,
+        child: false,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "simulation",
+        egress: true,
+        child: false,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "simulation",
+        egress: false,
+        child: true,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: true,
+      },
+      {
+        profile: "simulation",
+        egress: true,
+        child: true,
+        configOk: false,
+        effectiveEgress: false,
+        effectiveChild: true,
+      },
+      {
+        profile: "development",
+        egress: false,
+        child: false,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "development",
+        egress: true,
+        child: false,
+        configOk: true,
+        effectiveEgress: true,
+        effectiveChild: false,
+      },
+      {
+        profile: "development",
+        egress: false,
+        child: true,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: true,
+      },
+      {
+        profile: "development",
+        egress: true,
+        child: true,
+        configOk: true,
+        effectiveEgress: true,
+        effectiveChild: true,
+      },
+      {
+        profile: "personal",
+        egress: false,
+        child: false,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: false,
+      },
+      {
+        profile: "personal",
+        egress: true,
+        child: false,
+        configOk: true,
+        effectiveEgress: true,
+        effectiveChild: false,
+      },
+      {
+        profile: "personal",
+        egress: false,
+        child: true,
+        configOk: true,
+        effectiveEgress: false,
+        effectiveChild: true,
+      },
+      {
+        profile: "personal",
+        egress: true,
+        child: true,
+        configOk: true,
+        effectiveEgress: true,
+        effectiveChild: true,
+      },
+    ];
+    for (const row of rows) {
+      const loaded = loadSessionConfig({
+        env: {},
+        flags: {
+          profile: row.profile,
+          allowNetworkEgress: row.egress,
+          allowChildProcesses: row.child,
+        },
+      });
+      expect(loaded.isOk(), `${row.profile} egress=${row.egress} child=${row.child}`).toBe(
+        row.configOk,
+      );
+      const effective = effectivePolicy(
+        { allowNetworkEgress: row.egress, allowChildProcesses: row.child },
+        row.profile,
+        "/data",
+      );
+      expect(isPermitted(effective, "network-egress")).toBe(row.effectiveEgress);
+      expect(isPermitted(effective, "spawn-child-process")).toBe(row.effectiveChild);
+    }
   });
 
   it("flags always win over env (seeded property)", () => {
     fc.assert(
       fc.property(
         fc.record({
-          profile: fc.constantFrom("development", "simulation", "personal"),
+          profile: fc.constantFrom("development", "personal"),
           logLevel: fc.constantFrom(...LOG_LEVELS),
           egress: fc.boolean(),
           child: fc.boolean(),

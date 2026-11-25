@@ -1,4 +1,4 @@
-import type { Profile } from "../config/loader.js";
+import { PROFILE_CAPABILITIES, type Profile, type ProfileCapabilities } from "../config/loader.js";
 
 export interface SecurityPolicy {
   readonly allowNetworkEgress: boolean;
@@ -38,16 +38,8 @@ export function effectivePolicy(
   };
 }
 
-function profileCeiling(profile: Profile): CapabilityGrants {
-  switch (profile) {
-    case "offline":
-    case "evaluation":
-      return { allowNetworkEgress: false, allowChildProcesses: false };
-    case "development":
-    case "simulation":
-    case "personal":
-      return { allowNetworkEgress: true, allowChildProcesses: true };
-  }
+function profileCeiling(profile: Profile): ProfileCapabilities {
+  return PROFILE_CAPABILITIES[profile];
 }
 
 export function isPermitted(policy: SecurityPolicy, action: SensitiveAction): boolean {

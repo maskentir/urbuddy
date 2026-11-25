@@ -54,22 +54,29 @@ export function isAppError(value: unknown): value is AppError {
   );
 }
 
-/** Never throws, so catch blocks can convert without nesting further try blocks. */
+/** [correctness] Never throws, so catch blocks can convert without nesting further try blocks. */
 export function toAppError(thrown: unknown, fallbackMessage: string): AppError {
-  if (isAppError(thrown)) {
-    return thrown;
+  try {
+    if (isAppError(thrown)) {
+      return thrown;
+    }
+    if (
+      typeof thrown === "object" &&
+      thrown !== null &&
+      (thrown as { name?: unknown }).name === "AbortError"
+    ) {
+      return appError("CANCELLED", fallbackMessage);
+    }
+    if (thrown instanceof Error) {
+      const details = thrown.message !== "" ? { thrown: thrown.message } : undefined;
+      return details === undefined
+        ? appError("INTERNAL", fallbackMessage)
+        : appError("INTERNAL", fallbackMessage, { details });
+    }
+    return appError("INTERNAL", fallbackMessage);
+  } catch {
+    return appError("INTERNAL", fallbackMessage);
   }
-  if (
-    typeof thrown === "object" &&
-    thrown !== null &&
-    (thrown as { name?: unknown }).name === "AbortError"
-  ) {
-    return appError("CANCELLED", fallbackMessage);
-  }
-  if (thrown instanceof Error) {
-    return appError("INTERNAL", thrown.message !== "" ? thrown.message : fallbackMessage);
-  }
-  return appError("INTERNAL", fallbackMessage);
 }
 
 export function formatError(error: AppError): string {

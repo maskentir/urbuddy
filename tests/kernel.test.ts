@@ -54,7 +54,8 @@ describe("errors", () => {
   it("converts thrown values without throwing", () => {
     const fromError = toAppError(new Error("kaput"), "fallback");
     expect(fromError.code).toBe("INTERNAL");
-    expect(fromError.message).toBe("kaput");
+    expect(fromError.message).toBe("fallback");
+    expect(fromError.details).toEqual({ thrown: "kaput" });
     const controller = new AbortController();
     controller.abort();
     const fromAbort = toAppError(controller.signal.reason, "fallback");
@@ -63,6 +64,22 @@ describe("errors", () => {
     expect(toAppError(passthrough, "fallback")).toBe(passthrough);
     const fromUnknown = toAppError(undefined, "fallback");
     expect(fromUnknown).toEqual({ code: "INTERNAL", message: "fallback" });
+  });
+
+  it("never leaks foreign messages and never throws, even on hostile input", () => {
+    const secret = toAppError(new Error("token=shh-abc"), "safe fallback");
+    expect(secret.message).toBe("safe fallback");
+    expect(formatError(secret)).toBe("[INTERNAL] safe fallback");
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("trap");
+        },
+      },
+    );
+    const converted = toAppError(hostile, "safe fallback");
+    expect(converted).toEqual({ code: "INTERNAL", message: "safe fallback" });
   });
 
   it("formats with and without correlation", () => {
