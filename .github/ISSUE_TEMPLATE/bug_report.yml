@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible defect in the implementation
+labels: [bug]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened, with the exact command and output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal deterministic steps, including seed and environment.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Security and reliability impact
+      description: Data exposure, fail-open risk, or cleanup failure, if any.

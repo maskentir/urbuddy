@@ -1,0 +1,23 @@
+name: Architecture proposal
+description: Propose a structural change with trade-offs
+labels: [architecture]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: The constraint or requirement forcing this decision.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Proposed decision
+      description: The change and the alternatives that were rejected.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Measurements, prototypes, or prior-art backing the choice.
