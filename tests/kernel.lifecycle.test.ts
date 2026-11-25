@@ -6,7 +6,7 @@ import {
 } from "@kernel/commands";
 import { EXIT_CODES } from "@kernel/exit-codes";
 import { createDeterministicIdGenerator } from "@kernel/ids";
-import { type ManagedResource, ResourceScope, trackInterval } from "@kernel/lifecycle";
+import { type ManagedResource, ResourceScope } from "@kernel/lifecycle";
 import { type ResourceKind, RESOURCE_KINDS, resourceKindSchema } from "@kernel/resources";
 import { describe, expect, it } from "vitest";
 
@@ -95,7 +95,15 @@ describe("lifecycle", () => {
     const handle = setInterval(() => {
       ticks += 1;
     }, 5);
-    const tracked = trackInterval(scope, ids.resourceId(), handle);
+    handle.unref();
+    const tracked = scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => {
+        clearInterval(handle);
+        return Promise.resolve();
+      },
+    });
     expect(tracked.isOk()).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(ticks).toBeGreaterThan(0);
@@ -136,8 +144,9 @@ describe("lifecycle", () => {
         return Promise.resolve();
       },
     });
+    const stuckId = ids.resourceId();
     scope.register({
-      id: ids.resourceId(),
+      id: stuckId,
       kind: "timer",
       dispose: () => {
         released.push("stuck");
@@ -152,8 +161,13 @@ describe("lifecycle", () => {
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {
       expect(outcome.error.code).toBe("CANCELLED");
+      expect(outcome.error.details).toEqual({ resourceId: stuckId });
     }
     expect(released).toEqual(["stuck"]);
+    expect(scope.size).toBe(1);
+    expect(scope.isDisposed).toBe(false);
+    expect((await scope.disposeAll()).isOk()).toBe(true);
+    expect(released).toEqual(["stuck", "early"]);
   });
 
   it("pre-aborted signal skips disposal with the cancelled code", async () => {
@@ -176,6 +190,55 @@ describe("lifecycle", () => {
       expect(outcome.error.code).toBe("CANCELLED");
     }
     expect(released).toBe(false);
+    expect(scope.size).toBe(1);
+  });
+
+  it("concurrent callers observe the same failure outcome", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.reject(new Error("gone")),
+    });
+    const [first, second] = await Promise.all([scope.disposeAll(), scope.disposeAll()]);
+    expect(first.isErr()).toBe(true);
+    expect(second.isErr()).toBe(true);
+    if (first.isErr() && second.isErr()) {
+      expect(first.error).toBe(second.error);
+      expect(first.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    }
+  });
+
+  it("records synchronous disposer throws instead of rejecting", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: (): Promise<void> => {
+        throw new Error("sync failure");
+      },
+    });
+    const outcome = await scope.disposeAll();
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
+      expect(outcome.error.message).toBe("sync failure");
+    }
+  });
+
+  it("async disposal surfaces cleanup failures instead of swallowing them", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.reject(new Error("disk gone")),
+    });
+    await expect(scope[Symbol.asyncDispose]()).rejects.toMatchObject({
+      code: "RESOURCE_RELEASE_FAILED",
+    });
   });
 });
 

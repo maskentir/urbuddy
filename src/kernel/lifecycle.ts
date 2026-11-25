@@ -10,37 +10,42 @@ export interface ManagedResource {
   dispose(): Promise<void>;
 }
 
-type DisposeOutcome = "done" | "aborted" | AppError;
+type SettledDisposal =
+  | { readonly status: "done" }
+  | { readonly status: "abandoned" }
+  | { readonly status: "failed"; readonly cause: unknown };
 
 async function settleDispose(
-  dispose: Promise<void>,
+  start: () => Promise<void>,
   signal: AbortSignal | undefined,
-): Promise<DisposeOutcome> {
+): Promise<SettledDisposal> {
+  let pending: Promise<void>;
+  try {
+    pending = start();
+  } catch (thrown: unknown) {
+    return { status: "failed", cause: thrown };
+  }
   if (signal === undefined) {
     try {
-      await dispose;
-      return "done";
+      await pending;
+      return { status: "done" };
     } catch (thrown: unknown) {
-      const message = thrown instanceof Error ? thrown.message : "dispose threw";
-      return appError("RESOURCE_RELEASE_FAILED", message);
+      return { status: "failed", cause: thrown };
     }
   }
   if (signal.aborted) {
-    return "aborted";
+    return { status: "abandoned" };
   }
   let onAbort: () => void = () => undefined;
-  const abortGate = new Promise<"aborted">((resolve) => {
-    onAbort = () => resolve("aborted");
+  const abortGate = new Promise<{ readonly status: "abandoned" }>((resolve) => {
+    onAbort = () => resolve({ status: "abandoned" });
     signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
     return await Promise.race([
-      dispose.then(
-        (): DisposeOutcome => "done",
-        (thrown: unknown): DisposeOutcome => {
-          const message = thrown instanceof Error ? thrown.message : "dispose threw";
-          return appError("RESOURCE_RELEASE_FAILED", message);
-        },
+      pending.then(
+        (): SettledDisposal => ({ status: "done" }),
+        (thrown: unknown): SettledDisposal => ({ status: "failed", cause: thrown }),
       ),
       abortGate,
     ]);
@@ -49,21 +54,27 @@ async function settleDispose(
   }
 }
 
+function releaseFailure(id: ResourceId, cause: unknown): AppError {
+  const message = cause instanceof Error && cause.message !== "" ? cause.message : "dispose threw";
+  return appError("RESOURCE_RELEASE_FAILED", message, { details: { resourceId: id } });
+}
+
 export class ResourceScope {
   private readonly resources: ManagedResource[] = [];
-  private disposed = false;
+  private disposal: Promise<Result<void, AppError>> | undefined;
+  private terminal: Result<void, AppError> | undefined;
 
   get size(): number {
     return this.resources.length;
   }
 
   get isDisposed(): boolean {
-    return this.disposed;
+    return this.terminal !== undefined;
   }
 
   register(resource: ManagedResource): Result<void, AppError> {
-    if (this.disposed) {
-      return err(appError("RESOURCE_ACQUIRE_FAILED", "scope is already disposed"));
+    if (this.terminal !== undefined || this.disposal !== undefined) {
+      return err(appError("RESOURCE_ACQUIRE_FAILED", "scope is closed for registration"));
     }
     const kind = resourceKindSchema.safeParse(resource.kind);
     if (!kind.success) {
@@ -75,14 +86,21 @@ export class ResourceScope {
     return ok(undefined);
   }
 
-  async disposeAll(signal?: AbortSignal): Promise<Result<void, AppError>> {
-    if (this.disposed) {
-      return ok(undefined);
+  disposeAll(signal?: AbortSignal): Promise<Result<void, AppError>> {
+    if (this.terminal !== undefined) {
+      return Promise.resolve(this.terminal);
     }
-    this.disposed = true;
+    if (this.disposal !== undefined) {
+      return this.disposal;
+    }
+    this.disposal = this.runDisposal(signal);
+    return this.disposal;
+  }
+
+  private async runDisposal(signal: AbortSignal | undefined): Promise<Result<void, AppError>> {
     let firstFailure: AppError | undefined;
     while (this.resources.length > 0) {
-      const resource = this.resources.pop();
+      const resource = this.resources[this.resources.length - 1];
       if (resource === undefined) {
         break;
       }
@@ -92,39 +110,30 @@ export class ResourceScope {
         });
         break;
       }
-      const settled = await settleDispose(resource.dispose(), signal);
-      if (settled === "aborted") {
-        firstFailure = appError("CANCELLED", "scope disposal cancelled", {
+      const settled = await settleDispose(() => resource.dispose(), signal);
+      this.resources.pop();
+      if (settled.status === "abandoned") {
+        firstFailure = appError("CANCELLED", "scope disposal abandoned", {
           details: { resourceId: resource.id },
         });
         break;
-      } else if (settled !== "done" && firstFailure === undefined) {
-        firstFailure = settled;
+      }
+      if (settled.status === "failed" && firstFailure === undefined) {
+        firstFailure = releaseFailure(resource.id, settled.cause);
       }
     }
-    if (firstFailure !== undefined) {
-      return err(firstFailure);
+    const outcome = firstFailure === undefined ? ok(undefined) : err(firstFailure);
+    if (this.resources.length === 0) {
+      this.terminal = outcome;
     }
-    return ok(undefined);
+    this.disposal = undefined;
+    return outcome;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.disposeAll();
+    const outcome = await this.disposeAll();
+    if (outcome.isErr()) {
+      throw outcome.error;
+    }
   }
-}
-
-export function trackInterval(
-  scope: ResourceScope,
-  id: ResourceId,
-  handle: NodeJS.Timeout,
-): Result<void, AppError> {
-  handle.unref();
-  return scope.register({
-    id,
-    kind: "timer",
-    dispose: () => {
-      clearInterval(handle);
-      return Promise.resolve();
-    },
-  });
 }
