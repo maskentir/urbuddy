@@ -69,6 +69,9 @@ importers:
       husky:
         specifier: 9.1.7
         version: 9.1.7
+      ink-testing-library:
+        specifier: 4.0.0
+        version: 4.0.0(@types/react@19.3.3)
       knip:
         specifier: 6.48.0
         version: 6.48.0
@@ -79,7 +82,7 @@ importers:
         specifier: 3.10.1
         version: 3.10.1
       tsc-alias:
-        specifier: ^1.9.11
+        specifier: 1.9.11
         version: 1.9.11
       tsx:
         specifier: 4.23.15
@@ -1558,6 +1561,15 @@ packages:
   ini@6.0.0:
     resolution: {integrity: sha512-IBTdIkzZNOpqm7q3dRqJvMaldXjDHWkEDfrwGEQTs5eaQMWV+djAhR+wahyNNMAa+qpbDUhBMVt4ZKNwpPm7xQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
+
+  ink-testing-library@4.0.0:
+    resolution: {integrity: sha512-yF92kj3pmBvk7oKbSq5vEALO//o7Z9Ck/OaLNlkzXNeYdwfpxMQkSowGTFUCS5MSu9bWfSZMewGpp7bFc66D7Q==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   ink@8.0.0:
     resolution: {integrity: sha512-M2aFwZOqmkFxCwedy6xrP4E+DGoK57iahAFnfTqNyOyJ54O7DZzu027z/NI8EGy44Sw9O9BcbTF4QEUS2GHAtg==}
@@ -3605,6 +3617,10 @@ snapshots:
   ini@4.1.1: {}
 
   ini@6.0.0: {}
+
+  ink-testing-library@4.0.0(@types/react@19.3.3):
+    optionalDependencies:
+      '@types/react': 19.3.3
 
   ink@8.0.0(@types/react@19.3.3)(react@19.3.1):
     dependencies:
