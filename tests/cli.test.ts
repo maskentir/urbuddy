@@ -6,7 +6,6 @@ import {
   runApp,
   startApp,
   stopApp,
-  trackResource,
 } from "@bootstrap/composition";
 import { URBUDDY_VERSION } from "@bootstrap/version";
 import { fixedClock } from "@kernel/clock";
@@ -44,6 +43,7 @@ function testDeps(): CliDeps {
     sessionId: created.sessionId,
     correlationId: created.correlationId,
     nowIso: created.clock.isoNow(),
+    signal: new AbortController().signal,
   };
 }
 
@@ -165,6 +165,20 @@ describe("ink smoke", () => {
     const result = await runInkSmoke({ version: "0.0.0", sessionId: "s-1", dryRun: true });
     expect(result.isOk()).toBe(true);
   });
+
+  it("refuses to start on an already-aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runInkSmoke({
+      version: "0.0.0",
+      sessionId: "s-1",
+      signal: controller.signal,
+    });
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("CANCELLED");
+    }
+  });
 });
 
 describe("doctor checks", () => {
@@ -200,16 +214,15 @@ describe("composition", () => {
     }
     startApp(created);
     let released = false;
-    expect(
-      trackResource(created, {
-        id: created.ids.resourceId(),
-        kind: "timer",
-        dispose: () => {
-          released = true;
-          return Promise.resolve();
-        },
-      }),
-    ).toBe(true);
+    const registered = created.scope.register({
+      id: created.ids.resourceId(),
+      kind: "timer",
+      dispose: () => {
+        released = true;
+        return Promise.resolve();
+      },
+    });
+    expect(registered.isOk()).toBe(true);
     const stopped = await stopApp(created, { exitCode: EXIT_CODES.success });
     expect(stopped.error).toBeUndefined();
     expect(released).toBe(true);
@@ -251,6 +264,7 @@ describe("security enforcement", () => {
         sessionId: created.sessionId,
         correlationId: created.correlationId,
         nowIso: created.clock.isoNow(),
+        signal: new AbortController().signal,
       },
       captured.output,
     );

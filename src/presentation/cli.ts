@@ -17,6 +17,7 @@ export interface CliDeps {
   readonly sessionId: SessionId;
   readonly correlationId: CorrelationId;
   readonly nowIso: string;
+  readonly signal: AbortSignal;
 }
 
 export interface CliOutput {
@@ -43,7 +44,7 @@ export interface DoctorReport {
   readonly ok: boolean;
 }
 
-const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MAJOR = 24;
 
 export function nodeMajor(version: string): number | undefined {
   const trimmed = version.startsWith("v") ? version.slice(1) : version;
@@ -215,21 +216,27 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
       }
     });
 
-  program.action(async () => {
-    const options = program.opts<{ inkSmoke?: boolean }>();
-    if (options.inkSmoke === true) {
-      const result = await runInkSmoke({
-        version: deps.version,
-        sessionId: deps.sessionId,
-      });
-      if (result.isErr()) {
-        throw new Error(formatError(result.error));
+  program
+    .option("--ink-dwell-ms <ms>", "smoke frame duration in milliseconds", "50")
+    .action(async () => {
+      const options = program.opts<{ inkSmoke?: boolean; inkDwellMs?: string }>();
+      if (options.inkSmoke === true) {
+        const dwellRaw =
+          options.inkDwellMs === undefined ? Number.NaN : Number.parseInt(options.inkDwellMs, 10);
+        const result = await runInkSmoke({
+          version: deps.version,
+          sessionId: deps.sessionId,
+          ...(Number.isSafeInteger(dwellRaw) && dwellRaw > 0 ? { dwellMs: dwellRaw } : {}),
+          signal: deps.signal,
+        });
+        if (result.isErr()) {
+          throw result.error;
+        }
+        output.out(stripFormatting(`ink smoke ok (session ${deps.sessionId})`));
+        return;
       }
-      output.out(stripFormatting(`ink smoke ok (session ${deps.sessionId})`));
-      return;
-    }
-    program.help();
-  });
+      program.help();
+    });
 
   return program;
 }

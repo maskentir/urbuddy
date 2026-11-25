@@ -8,7 +8,7 @@ import {
   type IdGenerator,
   type SessionId,
 } from "@kernel/ids";
-import { ResourceScope, type ManagedResource } from "@kernel/lifecycle";
+import { ResourceScope } from "@kernel/lifecycle";
 import {
   loadSessionConfig,
   type ConfigFlags,
@@ -93,7 +93,9 @@ export function isAppContainer(value: AppContainer | { error: AppError }): value
   return !("error" in value);
 }
 
-function cliDepsFrom(app: AppContainer): CliDeps {
+const SHUTDOWN_GRACE_MS = 5_000;
+
+function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
   return {
     version: URBUDDY_VERSION,
     config: app.config,
@@ -101,6 +103,7 @@ function cliDepsFrom(app: AppContainer): CliDeps {
     sessionId: app.sessionId,
     correlationId: app.correlationId,
     nowIso: app.clock.isoNow(),
+    signal,
   };
 }
 
@@ -124,22 +127,13 @@ export async function stopApp(
   return {};
 }
 
-export function trackResource(app: AppContainer, resource: ManagedResource): boolean {
-  const result = app.scope.register(resource);
-  if (result.isErr()) {
-    app.logger.error(formatError(result.error));
-    return false;
-  }
-  return true;
-}
-
 export async function runApp(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<ExitCode> {
-  const shutdown = new AbortController();
+  const work = new AbortController();
   const onSignal = (): void => {
-    shutdown.abort();
+    work.abort();
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -154,23 +148,29 @@ export async function runApp(
       startApp(app);
       let code: ExitCode;
       try {
-        code = await runCli(argv, cliDepsFrom(app));
+        code = await runCli(argv, cliDepsFrom(app, work.signal));
       } catch (thrown: unknown) {
         const error = toAppError(thrown, "unhandled CLI failure");
         app.logger.error(formatError(error));
         code = exitCodeForError(error);
       }
-      if (shutdown.signal.aborted && code === EXIT_CODES.success) {
+      if (work.signal.aborted && code === EXIT_CODES.success) {
         code = EXIT_CODES.cancelled;
       }
-      const stopped = await stopApp(app, { exitCode: code, signal: shutdown.signal });
-      if (stopped.error !== undefined) {
-        app.logger.error(formatError(stopped.error));
-        if (code === EXIT_CODES.success) {
-          code = EXIT_CODES.generalError;
+      const cleanup = new AbortController();
+      const deadline = setTimeout(() => cleanup.abort(), SHUTDOWN_GRACE_MS);
+      try {
+        const stopped = await stopApp(app, { exitCode: code, signal: cleanup.signal });
+        if (stopped.error !== undefined) {
+          app.logger.error(formatError(stopped.error));
+          if (code === EXIT_CODES.success) {
+            code = EXIT_CODES.generalError;
+          }
         }
+        return code;
+      } finally {
+        clearTimeout(deadline);
       }
-      return code;
     });
   } finally {
     process.off("SIGINT", onSignal);
