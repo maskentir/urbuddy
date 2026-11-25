@@ -7,7 +7,7 @@ the working conventions.
 
 ## Requirements
 
-Node >= 22 (repo targets the Node 24 line; `.nvmrc` pins 24).
+Node >= 24 (repo targets the Node 24 line; `.nvmrc` pins 24).
 
 ## Quickstart
 

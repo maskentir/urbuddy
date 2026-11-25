@@ -4,7 +4,7 @@ This is a skeleton foundation: small, strict, and fully verified. Keep it that w
 
 ## Setup
 
-Requires Node >= 22 (see `.nvmrc`; repo targets the Node 24 line).
+Requires Node >= 24 (see `.nvmrc`; repo targets the Node 24 line).
 
 ```sh
 pnpm install --frozen-lockfile
