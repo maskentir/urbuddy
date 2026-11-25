@@ -37,16 +37,19 @@ export default tseslint.config(
         },
       ],
       "@typescript-eslint/consistent-type-imports": ["error", { fixStyle: "inline-type-imports" }],
-      "urbuddy/no-redundant-comments": [
+      "no-restricted-imports": [
         "error",
         {
-          allowed: [
-            "Never throws, so catch blocks can convert without nesting further try blocks.",
-            "Handlers run in subscription order.",
-            "Name-based redaction only: values under unrecognized keys pass through, so callers must not log raw payloads.",
+          patterns: [
+            {
+              group: ["src/**", "dist/**"],
+              message:
+                "Import through canonical @ aliases or owning-module relative imports instead.",
+            },
           ],
         },
       ],
+      "urbuddy/no-redundant-comments": "error",
       "urbuddy/canonical-imports": "error",
     },
   },

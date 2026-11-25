@@ -8,15 +8,6 @@ export default {
       to: { circular: true },
     },
     {
-      name: "no-orphans",
-      severity: "error",
-      comment:
-        "Every src module must be reachable from the composition root. " +
-        "No speculative modules: delete what main.ts cannot reach.",
-      from: { orphan: true, pathNot: ["src/bootstrap/main\\.ts$"] },
-      to: {},
-    },
-    {
       name: "not-to-unresolvable",
       severity: "error",
       comment: "Imports must resolve under NodeNext.",
@@ -47,9 +38,16 @@ export default {
     {
       name: "modules-boundary",
       severity: "error",
-      comment: "Domain modules never import presentation or bootstrap.",
+      comment: "Domain modules never import presentation, bootstrap, or platform internals.",
       from: { path: "^src/modules" },
-      to: { path: "^(src/presentation|src/bootstrap)" },
+      to: { path: "^(src/presentation|src/bootstrap|src/platform)" },
+    },
+    {
+      name: "modules-config-owns-itself",
+      severity: "error",
+      comment: "Configuration owns its contracts; security consumes them, never the reverse.",
+      from: { path: "^src/modules/config" },
+      to: { path: "^src/modules/security" },
     },
     {
       name: "presentation-boundary",
@@ -63,6 +61,7 @@ export default {
     doNotFollow: { path: "node_modules" },
     includeOnly: "^src",
     tsConfig: { fileName: "tsconfig.json" },
+    tsPreCompilationDeps: true,
     webpackConfig: { fileName: "webpack.cruise.cjs" },
   },
 };

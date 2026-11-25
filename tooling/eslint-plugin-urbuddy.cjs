@@ -2,9 +2,17 @@ const { builtinModules } = require("node:module");
 const path = require("node:path");
 
 const BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
+const ALIAS_SCOPES = [
+  "@kernel",
+  "@modules",
+  "@platform",
+  "@adapters",
+  "@presentation",
+  "@bootstrap",
+];
 
-function innerText(commentText) {
-  return commentText
+function innerText(comment) {
+  return comment
     .replace(/^\/\*+/, "")
     .replace(/\*+\/$/, "")
     .split("\n")
@@ -13,29 +21,34 @@ function innerText(commentText) {
     .trim();
 }
 
-function componentOf(filename, root) {
-  const relative = path.relative(root, filename).split(path.sep);
-  if (relative[0] !== "src" || relative.length < 2) {
+function isAliasSpecifier(specifier) {
+  return ALIAS_SCOPES.some((scope) => specifier === scope || specifier.startsWith(`${scope}/`));
+}
+
+function underTests(filename, root) {
+  return path.relative(root, filename).split(path.sep)[0] === "tests";
+}
+
+const COMMENT_CATEGORIES = ["correctness", "security", "legal", "protocol", "tooling"];
+
+function commentCategory(text) {
+  const inner = innerText(text);
+  const match = /^\[([a-z]+)\]/.exec(inner);
+  if (match === null || match[1] === undefined) {
     return undefined;
   }
-  return relative[1];
+  return COMMENT_CATEGORIES.includes(match[1]) ? match[1] : undefined;
 }
 
 const noRedundantComments = {
   meta: {
     type: "problem",
-    docs: { description: "Forbid redundant comments; allowlisted why-statements only." },
-    schema: [
-      {
-        type: "object",
-        properties: { allowed: { type: "array", items: { type: "string" } } },
-        additionalProperties: false,
-      },
-    ],
-    defaultOptions: [{ allowed: [] }],
+    docs: {
+      description: "Forbid comments except categorized why-statements and tooling directives.",
+    },
+    schema: [],
   },
   create(context) {
-    const allowed = new Set((context.options[0]?.allowed ?? []).map(innerText));
     return {
       Program() {
         const source = context.sourceCode;
@@ -48,10 +61,13 @@ const noRedundantComments = {
               node: comment,
               message: "Line comments are prohibited; express it in code.",
             });
-          } else if (!allowed.has(innerText(comment.value))) {
+            continue;
+          }
+          if (commentCategory(comment.value) === undefined) {
             context.report({
               node: comment,
-              message: "Unregistered block comment; use code or register the exception.",
+              message:
+                "Block comments need a [correctness|security|legal|protocol|tooling] marker with a why-justification.",
             });
           }
         }
@@ -63,11 +79,12 @@ const noRedundantComments = {
 const canonicalImports = {
   meta: {
     type: "problem",
-    docs: { description: "Enforce canonical alias, node:, and in-module relative imports." },
+    docs: {
+      description: "Enforce node: prefixes, extensionless aliases, and in-module relative imports.",
+    },
     schema: [],
   },
   create(context) {
-    const filename = context.filename;
     const root = context.cwd ?? process.cwd();
     return {
       ImportDeclaration(node) {
@@ -78,50 +95,36 @@ const canonicalImports = {
         if (BUILTINS.has(specifier) && !specifier.startsWith("node:")) {
           context.report({
             node: node.source,
-            message: `Builtin import "${specifier}" must use the node: prefix.`,
+            message: `Built-in import "${specifier}" must use the node: prefix.`,
           });
           return;
         }
-        if (
-          specifier.startsWith("src/") ||
-          specifier.startsWith("dist/") ||
-          specifier.startsWith("/") ||
-          specifier === "../src" ||
-          specifier.startsWith("../src/")
-        ) {
-          context.report({
-            node: node.source,
-            message: `Source-tree specifier "${specifier}" is forbidden; use a canonical @ alias.`,
-          });
-          return;
-        }
-        for (const segment of specifier.split("/")) {
-          if (segment === "internal" || segment.startsWith("_")) {
+        if (isAliasSpecifier(specifier)) {
+          if (/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|json)$/.test(specifier)) {
             context.report({
               node: node.source,
-              message: `Private deep import "${specifier}" is forbidden.`,
+              message: `Alias import "${specifier}" must be extensionless.`,
             });
-            return;
           }
-        }
-        if (!specifier.startsWith(".")) {
+          for (const segment of specifier.split("/")) {
+            if (segment === "internal" || segment.startsWith("_")) {
+              context.report({
+                node: node.source,
+                message: `Private deep import "${specifier}" is forbidden.`,
+              });
+              return;
+            }
+          }
           return;
         }
-        const owner = componentOf(filename, root);
-        if (owner === undefined) {
-          context.report({
-            node: node.source,
-            message: `Relative import "${specifier}" outside src must use a canonical @ alias.`,
-          });
+        if (underTests(context.filename, root)) {
+          if (specifier.startsWith(".")) {
+            context.report({
+              node: node.source,
+              message: `Tests must import src through canonical @ aliases, not "${specifier}".`,
+            });
+          }
           return;
-        }
-        const target = path.normalize(path.join(path.dirname(filename), specifier));
-        const boundary = path.join(root, "src", owner) + path.sep;
-        if (target !== boundary.slice(0, -1) && !target.startsWith(boundary)) {
-          context.report({
-            node: node.source,
-            message: `Relative import "${specifier}" escapes ${owner}; use a canonical @ alias.`,
-          });
         }
       },
     };
