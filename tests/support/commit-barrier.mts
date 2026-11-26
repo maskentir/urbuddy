@@ -48,6 +48,9 @@ const port = createReplayPort({
   },
 });
 
+/** [correctness] Referenced interval keeps the event loop alive until the parent SIGKILLs this harness. An unsettled promise alone does not hold the loop, so without this the process exits after the marker write and the controlled kill races a dead process group. Never unref or clear it. */
+void setInterval(() => undefined, 1000);
+
 const barrierOutput = {
   out: async (line: string): Promise<void> => {
     if (line.startsWith("replay complete")) {
