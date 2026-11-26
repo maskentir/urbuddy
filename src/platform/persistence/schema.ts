@@ -1,17 +1,33 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
-export const operations = sqliteTable("operations", {
-  opId: text("op_id").primaryKey(),
-  status: text("status").notNull(),
-  fingerprint: text("fingerprint"),
-  sessionId: text("session_id"),
-  streamId: text("stream_id"),
-  applied: integer("applied").notNull().default(0),
-  duplicates: integer("duplicates").notNull().default(0),
-  stale: integer("stale").notNull().default(0),
-  gaps: integer("gaps").notNull().default(0),
-  missing: integer("missing").notNull().default(0),
-});
+export const operations = sqliteTable(
+  "operations",
+  {
+    opId: text("op_id").primaryKey(),
+    status: text("status").notNull(),
+    fingerprint: text("fingerprint"),
+    sessionId: text("session_id"),
+    streamId: text("stream_id"),
+    applied: integer("applied").notNull().default(0),
+    duplicates: integer("duplicates").notNull().default(0),
+    stale: integer("stale").notNull().default(0),
+    gaps: integer("gaps").notNull().default(0),
+    missing: integer("missing").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("operations_stream_owner")
+      .on(table.sessionId, table.streamId)
+      .where(sql`${table.sessionId} IS NOT NULL`),
+  ],
+);
 
 export const evidenceEvents = sqliteTable(
   "evidence_events",
@@ -28,7 +44,15 @@ export const evidenceEvents = sqliteTable(
       .notNull()
       .references(() => operations.opId),
   },
-  (table) => [primaryKey({ columns: [table.sessionId, table.streamId, table.seq] })],
+  (table) => [
+    primaryKey({ columns: [table.sessionId, table.streamId, table.seq] }),
+    index("evidence_utterance").on(
+      table.sessionId,
+      table.streamId,
+      table.utteranceId,
+      table.revision,
+    ),
+  ],
 );
 
 export const evidenceGaps = sqliteTable(

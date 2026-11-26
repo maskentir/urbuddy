@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { join } from "node:path";
 
 import { systemClock, type Clock } from "@kernel/clock";
@@ -127,25 +128,8 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
               }
               const handle = opened.value;
               const persistence: EvidencePersistence = {
-                admit: async (opId) => {
-                  const result = evidence.admitOperation(handle, opId);
-                  if (result.isErr()) {
-                    return err(result.error);
-                  }
-                  if (result.value.mode !== "verify") {
-                    return ok({ mode: result.value.mode });
-                  }
-                  const verified = result.value;
-                  return ok({
-                    mode: "verify" as const,
-                    fingerprint: verified.fingerprint,
-                    summary: {
-                      ...verified.summary,
-                      sessionId: verified.sessionId,
-                      streamId: verified.streamId,
-                    },
-                  });
-                },
+                admit: async (opId, sourceFingerprint) =>
+                  evidence.admitOperation(handle, opId, sourceFingerprint),
                 record: async (event, opId) => {
                   const result = evidence.recordEvent(handle, { ...event, opId });
                   return result.isOk() ? ok(undefined) : err(result.error);
@@ -159,6 +143,27 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
                 close: async () => handle.close(),
               };
               return ok(persistence);
+            },
+            fingerprintFixture: async (
+              fixture: string,
+              signal: AbortSignal,
+            ): Promise<Result<string, AppError>> => {
+              const hash = createHash("sha256");
+              const stream = createReadStream(fixture);
+              const onAbort = (): void => {
+                stream.destroy();
+              };
+              signal.addEventListener("abort", onAbort, { once: true });
+              try {
+                for await (const chunk of stream) {
+                  hash.update(chunk as Buffer);
+                }
+                return ok(hash.digest("hex"));
+              } catch (thrown: unknown) {
+                return err(toAppError(thrown, "cannot read replay fixture"));
+              } finally {
+                signal.removeEventListener("abort", onAbort);
+              }
             },
             newOperationId: () => randomUUID(),
           }

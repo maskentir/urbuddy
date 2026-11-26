@@ -1,42 +1,14 @@
 import { createHash } from "node:crypto";
 
 import { appError, isAppError, toAppError, type AppError } from "@kernel/errors";
+import type { Admission, AppliedEvidence, OperationCounts } from "@modules/session/persistence";
 import { and, eq } from "drizzle-orm";
 import { err, ok, type Result } from "neverthrow";
 
 import type { EvidenceDatabase } from "./database.js";
 import { evidenceEvents, evidenceGaps, operations, outboxJobs } from "./schema.js";
 
-export interface EvidenceEventInput {
-  readonly opId: string;
-  readonly sessionId: string;
-  readonly streamId: string;
-  readonly seq: number;
-  readonly utteranceId: string;
-  readonly revision: number;
-  readonly kind: "partial" | "final";
-  readonly text: string;
-  readonly contentHash: string;
-}
-
-export interface OperationCounts {
-  readonly applied: number;
-  readonly duplicates: number;
-  readonly stale: number;
-  readonly gaps: number;
-  readonly missing: number;
-}
-
-export type Admission =
-  | { readonly mode: "new" }
-  | { readonly mode: "resume" }
-  | {
-      readonly mode: "verify";
-      readonly fingerprint: string;
-      readonly sessionId: string;
-      readonly streamId: string;
-      readonly summary: OperationCounts;
-    };
+export type EvidenceEventInput = AppliedEvidence & { readonly opId: string };
 
 const JOB_KIND = "evidence-committed";
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -58,32 +30,35 @@ function operationOf(handle: EvidenceDatabase, opId: string) {
 export function admitOperation(
   handle: EvidenceDatabase,
   opId: string,
+  sourceFingerprint: string,
 ): Result<Admission, AppError> {
   try {
     const existing = operationOf(handle, opId);
     if (existing === undefined) {
-      handle.db.insert(operations).values({ opId, status: "running" }).run();
+      handle.db
+        .insert(operations)
+        .values({ opId, status: "running", fingerprint: sourceFingerprint })
+        .run();
       return ok({ mode: "new" });
     }
+    if (existing.fingerprint !== sourceFingerprint) {
+      return err(invalid("conflicting operation identity reuse"));
+    }
     if (existing.status === "completed") {
-      if (
-        existing.fingerprint === null ||
-        existing.sessionId === null ||
-        existing.streamId === null
-      ) {
-        return err(appError("INTERNAL", "completed operation is missing its fingerprint"));
+      if (existing.sessionId === null || existing.streamId === null) {
+        return err(appError("INTERNAL", "completed operation is missing its identity"));
       }
       return ok({
         mode: "verify",
-        fingerprint: existing.fingerprint,
-        sessionId: existing.sessionId,
-        streamId: existing.streamId,
+        fingerprint: sourceFingerprint,
         summary: {
           applied: existing.applied,
           duplicates: existing.duplicates,
           stale: existing.stale,
           gaps: existing.gaps,
           missing: existing.missing,
+          sessionId: existing.sessionId,
+          streamId: existing.streamId,
         },
       });
     }
@@ -117,6 +92,19 @@ export function recordEvent(
           throw invalid("evidence requires an admitted running operation");
         }
         if (operation.sessionId === null) {
+          const owner = tx
+            .select()
+            .from(operations)
+            .where(
+              and(
+                eq(operations.sessionId, input.sessionId),
+                eq(operations.streamId, input.streamId),
+              ),
+            )
+            .get();
+          if (owner !== undefined && owner.opId !== input.opId) {
+            throw invalid("stream already owned by another operation");
+          }
           tx.update(operations)
             .set({ sessionId: input.sessionId, streamId: input.streamId })
             .where(eq(operations.opId, input.opId))
@@ -144,39 +132,46 @@ export function recordEvent(
           }
           return "duplicate" as const;
         }
-        const utteranceRows = tx
+        const sameRevision = tx
           .select()
           .from(evidenceEvents)
           .where(
             and(
               eq(evidenceEvents.sessionId, input.sessionId),
+              eq(evidenceEvents.streamId, input.streamId),
               eq(evidenceEvents.utteranceId, input.utteranceId),
+              eq(evidenceEvents.revision, input.revision),
             ),
           )
-          .all();
-        let maxRevision = -1;
-        let finalized = false;
-        for (const row of utteranceRows) {
-          maxRevision = Math.max(maxRevision, row.revision);
-          if (row.kind === "final") {
-            finalized = true;
+          .get();
+        if (sameRevision !== undefined) {
+          const identical =
+            sameRevision.contentHash === input.contentHash && sameRevision.kind === input.kind;
+          if (identical) {
+            return "duplicate" as const;
           }
-          if (row.revision === input.revision) {
-            const identical = row.contentHash === input.contentHash && row.kind === input.kind;
-            if (identical) {
-              return "duplicate" as const;
-            }
-            const transition =
-              row.kind === "partial" &&
-              input.kind === "final" &&
-              row.contentHash === input.contentHash;
-            if (!transition) {
-              throw invalid("contradictory evidence event");
-            }
+          const transition =
+            sameRevision.kind === "partial" &&
+            input.kind === "final" &&
+            sameRevision.contentHash === input.contentHash;
+          if (!transition) {
+            throw invalid("contradictory evidence event");
           }
-        }
-        if (finalized || input.revision < maxRevision) {
-          throw invalid("contradictory evidence event");
+        } else {
+          const aggregate = handle.sqlite
+            .prepare(
+              `SELECT COALESCE(MAX(revision), -1) AS maxRevision,
+                      COALESCE(MAX(kind = 'final'), 0) AS finalized
+               FROM evidence_events
+               WHERE session_id = ? AND stream_id = ? AND utterance_id = ?`,
+            )
+            .get(input.sessionId, input.streamId, input.utteranceId) as {
+            maxRevision: number;
+            finalized: number;
+          };
+          if (aggregate.finalized === 1 || input.revision < aggregate.maxRevision) {
+            throw invalid("contradictory evidence event");
+          }
         }
         tx.insert(evidenceEvents)
           .values({
@@ -197,6 +192,13 @@ export function recordEvent(
   } catch (thrown: unknown) {
     if (isAppError(thrown)) {
       return err(thrown);
+    }
+    if (
+      typeof thrown === "object" &&
+      thrown !== null &&
+      (thrown as { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE"
+    ) {
+      return err(invalid("stream already owned by another operation"));
     }
     return err(toAppError(thrown, "evidence write failed"));
   }
@@ -239,11 +241,11 @@ export function completeOperation(
   handle: EvidenceDatabase,
   input: {
     opId: string;
-    fingerprint: string;
     sessionId: string;
     streamId: string;
     summary: OperationCounts;
-    evidenceSeqs: readonly number[];
+    expectedCount: number;
+    expectedMaxSeq: number;
   },
 ): Result<{ status: "committed"; summary: OperationCounts }, AppError> {
   try {
@@ -253,25 +255,18 @@ export function completeOperation(
         if (operation === undefined || operation.status !== "running") {
           throw invalid("evidence requires an admitted running operation");
         }
-        const rows = tx
-          .select({ seq: evidenceEvents.seq })
-          .from(evidenceEvents)
-          .where(
-            and(
-              eq(evidenceEvents.sessionId, input.sessionId),
-              eq(evidenceEvents.streamId, input.streamId),
-            ),
+        const aggregate = handle.sqlite
+          .prepare(
+            `SELECT COUNT(*) AS n, COALESCE(MAX(seq), -1) AS maxSeq
+             FROM evidence_events WHERE session_id = ? AND stream_id = ?`,
           )
-          .all();
-        const durable = rows.map((row) => row.seq).sort((a, b) => a - b);
-        const expected = [...input.evidenceSeqs].sort((a, b) => a - b);
-        if (JSON.stringify(durable) !== JSON.stringify(expected)) {
+          .get(input.sessionId, input.streamId) as { n: number; maxSeq: number };
+        if (aggregate.n !== input.expectedCount || aggregate.maxSeq !== input.expectedMaxSeq) {
           throw invalid("operation evidence does not match durable evidence");
         }
         tx.update(operations)
           .set({
             status: "completed",
-            fingerprint: input.fingerprint,
             sessionId: input.sessionId,
             streamId: input.streamId,
             ...input.summary,

@@ -13,10 +13,19 @@ export interface ReplayOperationInput {
   readonly signal: AbortSignal;
   readonly persistence?: EvidencePersistence;
   readonly operationId?: string;
+  readonly sourceFingerprint?: string;
 }
 
 function hashText(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+async function disposeQuietly(source: ReplaySource): Promise<void> {
+  try {
+    await source.dispose();
+  } catch {
+    return;
+  }
 }
 
 export async function runReplay(
@@ -43,6 +52,17 @@ export async function runReplay(
     if (outcome.isOk()) {
       return err(toAppError(thrown, "replay cleanup failed"));
     }
+    return outcome;
+  }
+  if (outcome.isOk()) {
+    if (input.signal.aborted) {
+      return err(appError("CANCELLED", "replay cancelled"));
+    }
+    try {
+      await input.sink({ type: "completed", summary: outcome.value });
+    } catch (thrown: unknown) {
+      return err(toAppError(thrown, "replay failed"));
+    }
   }
   return outcome;
 }
@@ -53,18 +73,25 @@ async function runPersistent(
   input: ReplayOperationInput,
 ): Promise<Result<ReplaySummary, AppError>> {
   const operationId = input.operationId ?? "";
-  if (operationId === "") {
-    return err(appError("VALIDATION_FAILED", "persistent replay requires an operation id"));
+  const sourceFingerprint = input.sourceFingerprint ?? "";
+  if (operationId === "" || sourceFingerprint === "") {
+    await disposeQuietly(input.source);
+    return err(
+      appError(
+        "VALIDATION_FAILED",
+        "persistent replay requires an operation id and source fingerprint",
+      ),
+    );
   }
-  const admission = await persistence.admit(operationId);
+  const admission = await persistence.admit(operationId, sourceFingerprint);
   if (admission.isErr()) {
+    await disposeQuietly(input.source);
     return err(admission.error);
   }
   const mode = admission.value.mode;
-  const fingerprint = createHash("sha256");
-  const evidenceSeqs: number[] = [];
+  let evidenceCount = 0;
+  let maxSeq = -1;
   let identity: { sessionId: string; streamId: string } | undefined;
-  let fingerprintSeeded = false;
   const pendingGaps: Array<{ from: number; to: number }> = [];
   const recordGapBound = async (from: number, to: number): Promise<void> => {
     if (identity === undefined) {
@@ -85,31 +112,18 @@ async function runPersistent(
     input.source,
     async (event) => {
       if (event.type === "completed") {
-        if (!fingerprintSeeded) {
-          fingerprint.update(
-            JSON.stringify(["session", event.summary.sessionId, event.summary.streamId]),
-          );
-          fingerprintSeeded = true;
-        }
         return;
       }
       if (event.type === "applied") {
         if (identity === undefined) {
           identity = { sessionId: event.sessionId, streamId: event.streamId };
-          fingerprint.update(JSON.stringify(["session", identity.sessionId, identity.streamId]));
-          fingerprintSeeded = true;
-          for (const gap of pendingGaps) {
-            if (mode !== "verify") {
+          if (mode !== "verify") {
+            for (const gap of pendingGaps) {
               await recordGapBound(gap.from, gap.to);
             }
           }
           pendingGaps.length = 0;
         }
-        const contentHash = hashText(event.text);
-        fingerprint.update(
-          JSON.stringify([event.seq, event.utteranceId, event.revision, event.kind, contentHash]),
-        );
-        evidenceSeqs.push(event.seq);
         const applied = {
           sessionId: event.sessionId,
           streamId: event.streamId,
@@ -118,8 +132,10 @@ async function runPersistent(
           revision: event.revision,
           kind: event.kind,
           text: event.text,
-          contentHash,
+          contentHash: hashText(event.text),
         };
+        evidenceCount += 1;
+        maxSeq = Math.max(maxSeq, event.seq);
         const recorded =
           mode === "verify"
             ? await persistence.verify(applied)
@@ -127,14 +143,11 @@ async function runPersistent(
         if (recorded.isErr()) {
           throw recorded.error;
         }
-      } else if (event.type === "gap") {
-        fingerprint.update(JSON.stringify(["gap", event.from, event.to]));
-        if (mode !== "verify") {
-          if (identity === undefined) {
-            pendingGaps.push({ from: event.from, to: event.to });
-          } else {
-            await recordGapBound(event.from, event.to);
-          }
+      } else if (event.type === "gap" && mode !== "verify") {
+        if (identity === undefined) {
+          pendingGaps.push({ from: event.from, to: event.to });
+        } else {
+          await recordGapBound(event.from, event.to);
         }
       }
       await input.sink(event);
@@ -144,12 +157,8 @@ async function runPersistent(
   if (outcome.isErr()) {
     return outcome;
   }
-  const digest = fingerprint.digest("hex");
   if (mode === "verify" && admission.value.mode === "verify") {
-    if (digest !== admission.value.fingerprint) {
-      return err(appError("VALIDATION_FAILED", "conflicting operation identity reuse"));
-    }
-    const summary: ReplaySummary = {
+    return ok({
       sessionId: admission.value.summary.sessionId,
       streamId: admission.value.summary.streamId,
       applied: admission.value.summary.applied,
@@ -157,13 +166,10 @@ async function runPersistent(
       stale: outcome.value.stale,
       gaps: admission.value.summary.gaps,
       missing: admission.value.summary.missing,
-    };
-    await input.sink({ type: "completed", summary });
-    return ok(summary);
+    });
   }
   const completed = await persistence.complete({
     opId: operationId,
-    fingerprint: digest,
     sessionId: outcome.value.sessionId,
     streamId: outcome.value.streamId,
     summary: {
@@ -173,11 +179,11 @@ async function runPersistent(
       gaps: outcome.value.gaps,
       missing: outcome.value.missing,
     },
-    evidenceSeqs,
+    expectedCount: evidenceCount,
+    expectedMaxSeq: maxSeq,
   });
   if (completed.isErr()) {
     return err(completed.error);
   }
-  await input.sink({ type: "completed", summary: outcome.value });
   return outcome;
 }

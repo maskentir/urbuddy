@@ -20,6 +20,10 @@ export type ReplayPort = (input: ReplayInput) => Promise<Result<ReplaySummary, A
 
 export interface ReplayDeps {
   readonly runOperation: typeof runReplay;
+  readonly fingerprintFixture?: (
+    fixture: string,
+    signal: AbortSignal,
+  ) => Promise<Result<string, AppError>>;
   readonly openSource: (
     fixture: string,
     signal: AbortSignal,
@@ -49,37 +53,29 @@ function formatReplayEvent(event: SessionOutput): string {
 
 export function createReplayPort(deps: ReplayDeps): ReplayPort {
   return async (input) => {
-    const opened = await deps.openSource(input.fixture, input.signal);
-    if (opened.isErr()) {
-      return err(opened.error);
-    }
     const emit = async (event: SessionOutput): Promise<void> => {
       const line = input.json ? JSON.stringify(event) : stripFormatting(formatReplayEvent(event));
       await input.output.out(line);
     };
     try {
       if (input.persist !== true) {
+        const openedPlain = await deps.openSource(input.fixture, input.signal);
+        if (openedPlain.isErr()) {
+          return err(openedPlain.error);
+        }
         return await deps.runOperation({
-          source: opened.value,
+          source: openedPlain.value,
           sink: emit,
           signal: input.signal,
         });
       }
-      if (deps.openPersistence === undefined) {
-        await opened.value.dispose().catch(() => undefined);
+      if (deps.openPersistence === undefined || deps.fingerprintFixture === undefined) {
         return err(
           appError("VALIDATION_FAILED", "persistence requires native module authorization"),
         );
       }
-      const storeResult = await deps.openPersistence();
-      if (storeResult.isErr()) {
-        await opened.value.dispose().catch(() => undefined);
-        return err(storeResult.error);
-      }
       const operationId = input.operationId ?? deps.newOperationId?.() ?? "";
       if (operationId === "") {
-        await storeResult.value.close().catch(() => undefined);
-        await opened.value.dispose().catch(() => undefined);
         return err(appError("VALIDATION_FAILED", "persistent replay requires an operation id"));
       }
       if (input.operationId === undefined) {
@@ -89,12 +85,26 @@ export function createReplayPort(deps: ReplayDeps): ReplayPort {
             : `operation: ${operationId}`,
         );
       }
+      const fingerprint = await deps.fingerprintFixture(input.fixture, input.signal);
+      if (fingerprint.isErr()) {
+        return err(fingerprint.error);
+      }
+      const opened = await deps.openSource(input.fixture, input.signal);
+      if (opened.isErr()) {
+        return err(opened.error);
+      }
+      const storeResult = await deps.openPersistence();
+      if (storeResult.isErr()) {
+        await opened.value.dispose().catch(() => undefined);
+        return err(storeResult.error);
+      }
       return await deps.runOperation({
         source: opened.value,
         sink: emit,
         signal: input.signal,
         persistence: storeResult.value,
         operationId,
+        sourceFingerprint: fingerprint.value,
       });
     } catch (thrown: unknown) {
       return err(toAppError(thrown, "replay failed"));

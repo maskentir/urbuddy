@@ -1,7 +1,7 @@
 import type { AppError } from "@kernel/errors";
 import type { Result } from "neverthrow";
 
-interface AppliedEvidence {
+export interface AppliedEvidence {
   readonly sessionId: string;
   readonly streamId: string;
   readonly seq: number;
@@ -12,7 +12,7 @@ interface AppliedEvidence {
   readonly contentHash: string;
 }
 
-interface OperationCounts {
+export interface OperationCounts {
   readonly applied: number;
   readonly duplicates: number;
   readonly stale: number;
@@ -20,7 +20,7 @@ interface OperationCounts {
   readonly missing: number;
 }
 
-type Admission =
+export type Admission =
   | { readonly mode: "new" }
   | { readonly mode: "resume" }
   | {
@@ -33,7 +33,7 @@ type Admission =
     };
 
 export interface EvidencePersistence {
-  admit(opId: string): Promise<Result<Admission, AppError>>;
+  admit(opId: string, sourceFingerprint: string): Promise<Result<Admission, AppError>>;
   record(event: AppliedEvidence, opId: string): Promise<Result<void, AppError>>;
   recordGap(input: {
     opId: string;
@@ -45,11 +45,11 @@ export interface EvidencePersistence {
   verify(event: AppliedEvidence): Promise<Result<void, AppError>>;
   complete(input: {
     opId: string;
-    fingerprint: string;
     sessionId: string;
     streamId: string;
     summary: OperationCounts;
-    evidenceSeqs: readonly number[];
+    expectedCount: number;
+    expectedMaxSeq: number;
   }): Promise<Result<void, AppError>>;
   close(): Promise<void>;
 }

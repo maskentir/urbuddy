@@ -69,7 +69,13 @@ export function openEvidenceDatabase(
       chmodSync(dir, 0o700);
     }
     for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
-      if (existsSync(candidate) && lstatSync(candidate).isSymbolicLink()) {
+      let isLink = false;
+      try {
+        isLink = lstatSync(candidate).isSymbolicLink();
+      } catch {
+        isLink = false;
+      }
+      if (isLink) {
         return err(failure("evidence database path must not be a symlink"));
       }
     }

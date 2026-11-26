@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e575b89b-cf39-4cf5-82cd-85c6141fff9a",
+  "id": "8bd5e35a-4071-462c-9582-f2f9921572e6",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "evidence_events": {
@@ -71,7 +71,13 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "evidence_utterance": {
+          "name": "evidence_utterance",
+          "columns": ["session_id", "stream_id", "utterance_id", "revision"],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {
         "evidence_events_op_id_operations_op_id_fk": {
           "name": "evidence_events_op_id_operations_op_id_fk",
@@ -231,7 +237,14 @@
           "default": 0
         }
       },
-      "indexes": {},
+      "indexes": {
+        "operations_stream_owner": {
+          "name": "operations_stream_owner",
+          "columns": ["session_id", "stream_id"],
+          "isUnique": true,
+          "where": "\"operations\".\"session_id\" IS NOT NULL"
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

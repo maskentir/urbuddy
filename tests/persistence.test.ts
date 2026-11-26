@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +61,7 @@ function openStore(dir: string, options?: { busyTimeoutMs?: number; maxPageCount
   if (opened.isErr()) {
     throw new Error(`store must open: ${opened.error.message}`);
   }
-  admitOperation(opened.value, "op-1");
+  admitOperation(opened.value, "op-1", "fp-test");
   return opened.value;
 }
 
@@ -117,23 +117,23 @@ describe("evidence store", () => {
     recordEvent(store, ev());
     const first = completeOperation(store, {
       opId: "op-1",
-      fingerprint: "fp-1",
       sessionId: "s-1",
       streamId: "st-1",
       summary,
-      evidenceSeqs: [0],
+      expectedCount: 1,
+      expectedMaxSeq: 0,
     });
     expect(first).toMatchObject({ value: { status: "committed" } });
-    const readmission = admitOperation(store, "op-1");
-    expect(readmission).toMatchObject({ value: { mode: "verify", fingerprint: "fp-1" } });
+    const readmission = admitOperation(store, "op-1", "fp-test");
+    expect(readmission).toMatchObject({ value: { mode: "verify", fingerprint: "fp-test" } });
     expect(countJobs(store)).toBe(1);
     const conflict = completeOperation(store, {
       opId: "op-1",
-      fingerprint: "fp-other",
       sessionId: "s-1",
       streamId: "st-1",
       summary,
-      evidenceSeqs: [0],
+      expectedCount: 1,
+      expectedMaxSeq: 0,
     });
     expect(conflict.isErr()).toBe(true);
     store.close();
@@ -145,11 +145,11 @@ describe("evidence store", () => {
     recordEvent(a, ev());
     completeOperation(a, {
       opId: "op-1",
-      fingerprint: "fp",
       sessionId: "s-1",
       streamId: "st-1",
       summary,
-      evidenceSeqs: [0],
+      expectedCount: 1,
+      expectedMaxSeq: 0,
     });
     const b = openStore(dir);
     const claimA = claimJobs(a, { limit: 1, leaseMs: 1000, nowMs: 1000 });
@@ -174,11 +174,11 @@ describe("evidence store", () => {
     recordEvent(store, ev());
     completeOperation(store, {
       opId: "op-1",
-      fingerprint: "fp",
       sessionId: "s-1",
       streamId: "st-1",
       summary,
-      evidenceSeqs: [0],
+      expectedCount: 1,
+      expectedMaxSeq: 0,
     });
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const claim = claimJobs(store, { limit: 1, leaseMs: 1000, nowMs: attempt * 10 });
@@ -193,10 +193,10 @@ describe("evidence store", () => {
   });
 
   it("surfaces capacity failure without partial writes beyond committed rows", () => {
-    const store = openStore(tempDir(), { maxPageCount: 12 });
+    const store = openStore(tempDir(), { maxPageCount: 30 });
     let inserted = 0;
     let failed = false;
-    for (let i = 0; i < 200; i += 1) {
+    for (let i = 0; i < 400; i += 1) {
       const text = `payload-${i}-` + "x".repeat(500);
       const result = recordEvent(
         store,
@@ -376,6 +376,74 @@ describe("persist integration", () => {
 });
 
 describe("admission and migration regressions", () => {
+  it("rejects a second operation owning the same stream", () => {
+    const store = openStore(tempDir());
+    recordEvent(store, ev());
+    admitOperation(store, "op-2", "fp-other");
+    const result = recordEvent(store, ev({ seq: 1, utteranceId: "u2", opId: "op-2" }));
+    expect(result.isErr()).toBe(true);
+    store.close();
+  });
+
+  it("keeps identical utterance ids in independent streams distinct", () => {
+    const store = openStore(tempDir());
+    admitOperation(store, "op-2", "fp-2");
+    expect(recordEvent(store, ev()).isOk()).toBe(true);
+    expect(recordEvent(store, ev({ streamId: "st-2", opId: "op-2" })).isOk()).toBe(true);
+    expect(countEvidence(store)).toBe(2);
+    store.close();
+  });
+
+  it("rolls back completion when outbox insertion fails", () => {
+    const dir = tempDir();
+    const store = openStore(dir);
+    recordEvent(store, ev());
+    const raw = new Database(join(dir, "evidence.sqlite"));
+    raw.exec("DROP TABLE outbox_jobs");
+    raw.close();
+    const result = completeOperation(store, {
+      opId: "op-1",
+      sessionId: "s-1",
+      streamId: "st-1",
+      summary,
+      expectedCount: 1,
+      expectedMaxSeq: 0,
+    });
+    expect(result.isErr()).toBe(true);
+    const check = new Database(join(dir, "evidence.sqlite"), { readonly: true });
+    const status = check.prepare("SELECT status FROM operations WHERE op_id = 'op-1'").get() as {
+      status: string;
+    };
+    expect(status.status).toBe("running");
+    check.close();
+    store.close();
+  });
+
+  it("fails migration safely on conflicting schema and recovers after removal", () => {
+    const dir = tempDir();
+    const raw = new Database(join(dir, "evidence.sqlite"));
+    raw.exec("CREATE TABLE evidence_events (bogus TEXT)");
+    raw.close();
+    expect(openEvidenceDatabase(join(dir, "evidence.sqlite")).isErr()).toBe(true);
+    const fix = new Database(join(dir, "evidence.sqlite"));
+    fix.exec("DROP TABLE evidence_events");
+    fix.close();
+    expect(openEvidenceDatabase(join(dir, "evidence.sqlite")).isOk()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects symlinked database paths", () => {
+    const dir = tempDir();
+    const target = join(dir, "real.sqlite");
+    writeFileSync(target, "", "utf8");
+    symlinkSync(target, join(dir, "evidence.sqlite"));
+    expect(openEvidenceDatabase(join(dir, "evidence.sqlite")).isErr()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects dangling symlink database paths", () => {
+    const dir = tempDir();
+    symlinkSync(join(dir, "missing.sqlite"), join(dir, "evidence.sqlite"));
+    expect(openEvidenceDatabase(join(dir, "evidence.sqlite")).isErr()).toBe(true);
+  });
   it("persists same-revision partial-to-final transition", async () => {
     const dir = tempDir();
     const path = join(dir, "finality.ndjson");
@@ -479,11 +547,11 @@ describe("admission and migration regressions", () => {
     recordEvent(store, ev());
     completeOperation(store, {
       opId: "op-1",
-      fingerprint: "fp",
       sessionId: "s-1",
       streamId: "st-1",
       summary,
-      evidenceSeqs: [0],
+      expectedCount: 1,
+      expectedMaxSeq: 0,
     });
     const raw = new Database(join(dir, "evidence.sqlite"));
     raw.exec("CREATE TABLE IF NOT EXISTS test_effects (job_id TEXT PRIMARY KEY)");
