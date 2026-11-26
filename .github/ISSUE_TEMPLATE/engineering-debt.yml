@@ -1,4 +1,4 @@
-name: Engineering debt
+name: engineering-debt
 description: Record a shortcut that must be paid back
 labels: [debt]
 body:

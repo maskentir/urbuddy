@@ -1,4 +1,4 @@
-name: Bug report
+name: bug-report
 description: Report a reproducible defect in the implementation
 labels: [bug]
 body:
