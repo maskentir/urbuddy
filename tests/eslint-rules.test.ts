@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 
 import tsParser from "@typescript-eslint/parser";
 import { type Rule, RuleTester } from "eslint";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const plugin = require("../tooling/eslint-plugin-urbuddy.cjs") as {
@@ -49,7 +49,6 @@ describe("urbuddy/no-redundant-comments", () => {
         },
       ],
     });
-    expect(true).toBe(true);
   });
 });
 
@@ -107,6 +106,5 @@ describe("urbuddy/canonical-imports", () => {
         },
       ],
     });
-    expect(true).toBe(true);
   });
 });
