@@ -58,7 +58,12 @@ const serverEventSchema = z.discriminatedUnion("type", [
 
 const MAX_QUEUE_EVENTS = 1_024;
 const SEND_WAIT_MS = 10_000;
+const SEND_CALLBACK_TIMEOUT_MS = 5_000;
 const TERMINATE_CLOSE_MS = 2_000;
+
+function bytesPerSecond(encoding: PcmEncoding): number {
+  return encoding === "PCM_16KHZ" ? 32_000 : 48_000;
+}
 
 function validateEndpoint(raw: string): Result<URL, AppError> {
   let url: URL;
@@ -146,6 +151,7 @@ class MuseSession implements SpeechSession {
   private ending = false;
   private drainDeadline: ReturnType<typeof setTimeout> | undefined;
   private readonly shutdown: AbortController;
+  private readonly combined: AbortSignal;
   private settled: Promise<void>;
   private resolveSettled: (() => void) | undefined;
 
@@ -159,6 +165,7 @@ class MuseSession implements SpeechSession {
   ) {
     this.encoding = encoding;
     this.shutdown = new AbortController();
+    this.combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
     this.settled = new Promise<void>((resolve) => {
       this.resolveSettled = resolve;
     });
@@ -552,9 +559,8 @@ class MuseSession implements SpeechSession {
     const backoff = this.options.reconnectBackoffMs ?? [250, 1_000];
     const delay = backoff[Math.min(this.reconnects - 1, backoff.length - 1)] ?? 1_000;
     const sleep = this.options.sleep ?? defaultSleep;
-    const combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
     try {
-      await sleep(delay, combined);
+      await sleep(delay, this.combined);
     } catch (thrown: unknown) {
       this.fail(toAppError(thrown, "speech connection cancelled"));
       return;
@@ -569,7 +575,7 @@ class MuseSession implements SpeechSession {
       return;
     }
     const sentThisEpoch = this.sentBytes - this.sentAtEpochStart;
-    const sentMs = Math.round((sentThisEpoch / 48_000) * 1000);
+    const sentMs = Math.round((sentThisEpoch / bytesPerSecond(this.encoding)) * 1000);
     const uncertainMs = Math.max(0, sentMs - this.lastProcessedMs);
     this.epoch += 1;
     this.lastProcessedMs = 0;
@@ -580,6 +586,23 @@ class MuseSession implements SpeechSession {
   }
 
   private async sendChunk(socket: WebSocket, pcm: Buffer): Promise<Result<void, AppError>> {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      this.fail(appError("INTERNAL", "speech audio send timed out"));
+      this.terminateSocket(socket);
+    }, SEND_CALLBACK_TIMEOUT_MS);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      if (this.combined.aborted) {
+        reject(appError("CANCELLED", "speech connection cancelled"));
+        return;
+      }
+      onAbort = (): void => {
+        reject(appError("CANCELLED", "speech connection cancelled"));
+      };
+      this.combined.addEventListener("abort", onAbort, { once: true });
+    });
     try {
       await Promise.race([
         new Promise<void>((resolve, reject) => {
@@ -594,16 +617,27 @@ class MuseSession implements SpeechSession {
         this.settled.then(() => {
           throw appError("CANCELLED", "speech connection cancelled");
         }),
+        aborted,
       ]);
+      if (timedOut) {
+        return err(appError("INTERNAL", "speech audio send timed out"));
+      }
+      return ok(undefined);
     } catch (thrown: unknown) {
+      if (timedOut) {
+        return err(appError("INTERNAL", "speech audio send timed out"));
+      }
       return err(toAppError(thrown, "speech audio send failed"));
+    } finally {
+      clearTimeout(timer);
+      if (onAbort !== undefined) {
+        this.combined.removeEventListener("abort", onAbort);
+      }
     }
-    return ok(undefined);
   }
 
   private async waitForActive(): Promise<Result<WebSocket, AppError>> {
     const deadline = Date.now() + SEND_WAIT_MS;
-    const combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
     for (;;) {
       if (this.failure !== undefined) {
         return err(this.failure);
@@ -622,7 +656,7 @@ class MuseSession implements SpeechSession {
       await Promise.race([
         this.epochGate,
         this.settled,
-        this.rejectedAfter(remaining, combined),
+        this.rejectedAfter(remaining, this.combined),
       ]).catch(() => undefined);
     }
   }
@@ -671,10 +705,7 @@ class MuseSession implements SpeechSession {
         return err(appError("INTERNAL", "speech outbound buffering exceeded its bound"));
       }
       const sleep = this.options.sleep ?? defaultSleep;
-      await Promise.race([
-        sleep(10, AbortSignal.any([this.options.signal, this.shutdown.signal])),
-        this.settled,
-      ]).catch(() => undefined);
+      await Promise.race([sleep(10, this.combined), this.settled]).catch(() => undefined);
       const current = await this.waitForActive();
       if (current.isErr()) {
         return err(current.error);
@@ -690,12 +721,12 @@ class MuseSession implements SpeechSession {
   }
 
   async endInput(): Promise<void> {
+    this.ending = true;
     const ready = await this.waitForActive();
     if (ready.isErr()) {
       return;
     }
     const socket = ready.value;
-    this.ending = true;
     this.armDrainDeadline(socket);
     try {
       socket.send(JSON.stringify({ type: "endStream" }));
@@ -715,31 +746,56 @@ class MuseSession implements SpeechSession {
     }, drainTimeoutMs);
   }
 
-  async terminate(): Promise<void> {
+  async terminate(): Promise<Result<void, AppError>> {
     if (this.drainDeadline !== undefined) {
       clearTimeout(this.drainDeadline);
       this.drainDeadline = undefined;
     }
     const active = this.active;
     const pending = this.pending;
+    const sockets: WebSocket[] = [];
+    if (active !== undefined) {
+      sockets.push(active);
+    }
+    if (pending !== undefined && pending !== active) {
+      sockets.push(pending);
+    }
     this.active = undefined;
     this.pending = undefined;
     this.settleShutdown();
-    this.terminateSocket(active);
-    this.terminateSocket(pending);
-    const observed: Promise<void>[] = [];
-    if (active !== undefined) {
-      observed.push(this.closeObserved.get(active) ?? Promise.resolve());
+    for (const socket of sockets) {
+      try {
+        if (this.failure === undefined && socket.readyState === WebSocket.OPEN) {
+          socket.close(1000);
+        } else {
+          this.terminateSocket(socket);
+        }
+      } catch {
+        this.terminateSocket(socket);
+      }
     }
-    if (pending !== undefined && pending !== active) {
-      observed.push(this.closeObserved.get(pending) ?? Promise.resolve());
+    if (sockets.length === 0) {
+      return ok(undefined);
     }
-    if (observed.length > 0) {
-      const bound = new Promise<void>((resolve) => {
-        setTimeout(resolve, TERMINATE_CLOSE_MS).unref?.();
-      });
-      await Promise.race([Promise.all(observed).then(() => undefined), bound]);
+    const observed = sockets.map((socket) => this.closeObserved.get(socket) ?? Promise.resolve());
+    let expired = false;
+    const bound = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        expired = true;
+        resolve();
+      }, TERMINATE_CLOSE_MS);
+      if (typeof timer.unref === "function") {
+        timer.unref();
+      }
+    });
+    await Promise.race([Promise.all(observed).then(() => undefined), bound]);
+    if (expired) {
+      for (const socket of sockets) {
+        this.terminateSocket(socket);
+      }
+      return err(appError("RESOURCE_RELEASE_FAILED", "speech transport closure unobserved"));
     }
+    return ok(undefined);
   }
 }
 

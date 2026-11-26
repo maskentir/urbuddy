@@ -35,7 +35,7 @@ export interface SpeechSession {
   events(): AsyncIterable<SpeechProviderEvent>;
   sendAudio(pcm: Buffer): Promise<Result<void, AppError>>;
   endInput(): Promise<void>;
-  terminate(): Promise<void>;
+  terminate(): Promise<Result<void, AppError>>;
 }
 
 export interface OpenSpeechSessionOptions {
@@ -329,6 +329,10 @@ export async function runTranscription(
     await input.source.dispose().catch(() => undefined);
     return err(appError("VALIDATION_FAILED", "transcription duration must be 1 to 300 seconds"));
   }
+  if (input.signal.aborted) {
+    await input.source.dispose().catch(() => undefined);
+    return err(appError("CANCELLED", "transcription cancelled"));
+  }
   const startedAt = Date.now();
   let firstPartialMs: number | undefined;
   let discontinuities = 0;
@@ -408,7 +412,7 @@ export async function runTranscription(
           mode: input.mode,
           encoding: converter.outputEncoding,
           keywords: input.keywords,
-          signal: input.signal,
+          signal: operation.signal,
         });
         if (opened.isErr()) {
           throw opened.error;
@@ -519,7 +523,12 @@ export async function runTranscription(
       await session.terminate().catch(() => undefined);
       return err(disposed.error);
     }
-    await session.terminate().catch(() => undefined);
+    const terminated = await session
+      .terminate()
+      .catch((thrown: unknown) => err(toAppError(thrown, "transcription cleanup failed")));
+    if (terminated.isErr()) {
+      return err(terminated.error);
+    }
     const stats = converter?.stats ?? { inputFrames: 0, outputFrames: 0 };
     return ok({
       providerId: input.provider.providerId,
@@ -545,8 +554,14 @@ export async function runTranscription(
       .stop()
       .then(() => undefined)
       .catch((stopped: unknown) => toAppError(stopped, "transcription source stop failed"));
+    let terminateError: AppError | undefined;
     if (session !== undefined) {
-      await session.terminate().catch(() => undefined);
+      const terminated = await session
+        .terminate()
+        .catch((thrown: unknown) => err(toAppError(thrown, "transcription cleanup failed")));
+      if (terminated.isErr()) {
+        terminateError = terminated.error;
+      }
     }
     await consumeEvents.catch(() => undefined);
     const disposed = await input.source
@@ -557,6 +572,9 @@ export async function runTranscription(
     const cleanupCodes: string[] = [];
     if (stopError !== undefined) {
       cleanupCodes.push(stopError.code);
+    }
+    if (terminateError !== undefined) {
+      cleanupCodes.push(terminateError.code);
     }
     if (disposed.isErr()) {
       cleanupCodes.push(disposed.error.code);

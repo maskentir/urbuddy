@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import type { Server as NetServer, Socket as NetSocket } from "node:net";
 import { join } from "node:path";
 
 import { createMuseProvider } from "@adapters/speech/muse";
@@ -12,7 +13,7 @@ import {
   type TranscriptEvent,
 } from "@modules/perception/speech";
 import { createTranscribePort } from "@presentation/transcribe";
-import { ok, type Result } from "neverthrow";
+import { err, ok, type Result } from "neverthrow";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
@@ -139,6 +140,7 @@ export class FakeSpeechSession implements SpeechSession {
   readonly sent: Buffer[] = [];
   endInputSeen = false;
   terminated = false;
+  terminateError: AppError | undefined;
   constructor(
     private readonly script: (session: FakeSpeechSession) => AsyncIterable<SpeechProviderEvent>,
   ) {}
@@ -156,16 +158,124 @@ export class FakeSpeechSession implements SpeechSession {
     this.endInputSeen = true;
   }
 
-  async terminate(): Promise<void> {
+  async terminate(): Promise<Result<void, AppError>> {
     this.terminated = true;
+    if (this.terminateError !== undefined) {
+      return err(this.terminateError);
+    }
+    return ok(undefined);
   }
 }
+
+interface Blackhole {
+  readonly url: Promise<string>;
+  readonly closed: Promise<void>;
+  readonly connections: () => number;
+  drain(): void;
+  close(): Promise<void>;
+}
+
+async function startBlackhole(acknowledge: boolean): Promise<Blackhole> {
+  const { createServer } = await import("node:net");
+  const { createHash } = await import("node:crypto");
+  let connectionCount = 0;
+  let tcp: NetServer | undefined;
+  const live = new Set<NetSocket>();
+  let resolveClosed: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const url = new Promise<string>((resolve, reject) => {
+    const server = createServer((socket) => {
+      connectionCount += 1;
+      live.add(socket);
+      socket.once("close", () => {
+        live.delete(socket);
+        if (live.size === 0) {
+          resolveClosed?.();
+        }
+      });
+      let buffered = Buffer.alloc(0);
+      let upgraded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (upgraded) {
+          return;
+        }
+        buffered = Buffer.concat([buffered, chunk]);
+        const end = buffered.indexOf("\r\n\r\n");
+        if (end === -1) {
+          return;
+        }
+        const head = buffered.toString("ascii", 0, end);
+        const key = head
+          .split("\r\n")
+          .find((line) => line.toLowerCase().startsWith("sec-websocket-key:"))
+          ?.split(":")[1]
+          ?.trim();
+        if (key === undefined) {
+          socket.destroy();
+          return;
+        }
+        const accept = createHash("sha1")
+          .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+          .digest("base64");
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        upgraded = true;
+        if (acknowledge) {
+          const payload = Buffer.from(JSON.stringify({ sessionId: "blackhole" }));
+          socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+        }
+        socket.pause();
+      });
+      socket.on("error", () => undefined);
+    });
+    tcp = server;
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("blackhole has no port"));
+        return;
+      }
+      resolve(`ws://127.0.0.1:${address.port}`);
+    });
+  });
+  return {
+    url,
+    closed,
+    connections: () => connectionCount,
+    drain: () => {
+      for (const socket of live) {
+        socket.resume();
+      }
+    },
+    close: async () => {
+      await url;
+      for (const socket of live) {
+        try {
+          socket.destroy();
+        } catch {
+          continue;
+        }
+      }
+      if (tcp !== undefined) {
+        await new Promise<void>((done) => tcp?.close(() => done()));
+      }
+    },
+  };
+}
 let server: SpeechTestServer | undefined;
+let blackhole: Blackhole | undefined;
 let tempDir: string | undefined;
 
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  await blackhole?.close();
+  blackhole = undefined;
   if (tempDir !== undefined) {
     rmSync(tempDir, { recursive: true, force: true });
     tempDir = undefined;
@@ -242,10 +352,12 @@ function providerFor(url: string, extra: Record<string, unknown> = {}): SpeechPr
   }) as SpeechProvider;
 }
 
-function pacedSource(frames: number, gapMs: number): CaptureSource & { stopSeen: boolean } {
-  const items: SourceItem[] = [
-    { type: "format", seq: 0, format: { sampleRate: 24_000, channels: 1 } },
-  ];
+function pacedSource(
+  frames: number,
+  gapMs: number,
+  sampleRate = 24_000,
+): CaptureSource & { stopSeen: boolean } {
+  const items: SourceItem[] = [{ type: "format", seq: 0, format: { sampleRate, channels: 1 } }];
   for (let i = 0; i < frames; i += 1) {
     items.push({
       type: "audio",
@@ -831,6 +943,123 @@ describe("termination and reconnect ownership", () => {
   });
 });
 
+describe("send deadline and transport shutdown", () => {
+  function bigSource(frames: number): CaptureSource & { stopSeen: boolean } {
+    const items: SourceItem[] = [
+      { type: "format", seq: 0, format: { sampleRate: 24_000, channels: 1 } },
+    ];
+    for (let i = 0; i < frames; i += 1) {
+      items.push({
+        type: "audio",
+        chunk: { seq: i + 1, startSample: i * 480, samples: new Float32Array(480).fill(0.1) },
+      });
+    }
+    items.push({
+      type: "end",
+      seq: frames + 1,
+      end: {
+        captured: frames,
+        delivered: frames,
+        dropped: 0,
+        reason: "completed",
+        sourceFrames: frames * 480,
+      },
+    });
+    return trackedSource(items);
+  }
+
+  it("fails a stalled send within the deadline and terminates the transport", async () => {
+    blackhole = await startBlackhole(true);
+    const endpoint = await blackhole.url;
+    const provider = providerFor(endpoint, { maxBufferedBytes: 64 * 1_024 * 1_024 });
+    const outcome = await runTranscription({
+      source: bigSource(9000),
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("INTERNAL");
+      expect(outcome.error.message).toContain("timed out");
+    }
+    expect(blackhole.connections()).toBe(1);
+    blackhole.drain();
+    await blackhole.closed;
+  }, 30_000);
+
+  it("cancels a stalled send promptly on caller abort", async () => {
+    blackhole = await startBlackhole(true);
+    const endpoint = await blackhole.url;
+    const controller = new AbortController();
+    const provider = providerFor(endpoint, { maxBufferedBytes: 64 * 1_024 * 1_024 });
+    const outcome = runTranscription({
+      source: bigSource(9000),
+      provider,
+      signal: controller.signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const started = Date.now();
+    controller.abort();
+    const result = await outcome;
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("CANCELLED");
+    }
+    blackhole.drain();
+    await blackhole.closed;
+  }, 30_000);
+
+  it("reports an unobserved closure as an explicit release failure", async () => {
+    blackhole = await startBlackhole(true);
+    const endpoint = await blackhole.url;
+    const provider = providerFor(endpoint);
+    const opened = await provider.openSession({
+      mode: "endpointing",
+      encoding: "PCM_24KHZ",
+      keywords: [],
+      signal: new AbortController().signal,
+    });
+    expect(opened.isOk()).toBe(true);
+    if (opened.isErr()) {
+      return;
+    }
+    const terminated = await opened.value.terminate();
+    expect(terminated.isErr()).toBe(true);
+    if (terminated.isErr()) {
+      expect(terminated.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    }
+    expect(blackhole.connections()).toBe(1);
+  }, 10_000);
+
+  it("observes closure on normal termination", async () => {
+    server = new SpeechTestServer(({ socket }) => {
+      acknowledge(socket);
+    });
+    const provider = providerFor(await server.url());
+    const opened = await provider.openSession({
+      mode: "endpointing",
+      encoding: "PCM_24KHZ",
+      keywords: [],
+      signal: new AbortController().signal,
+    });
+    expect(opened.isOk()).toBe(true);
+    if (opened.isErr()) {
+      return;
+    }
+    const terminated = await opened.value.terminate();
+    expect(terminated.isOk()).toBe(true);
+    await server.closed;
+    expect(server.connections).toBe(1);
+  });
+});
+
 describe("recognition completeness", () => {
   it("reports an unresolved turn instead of promoting it to final", async () => {
     server = new SpeechTestServer(({ socket }) => {
@@ -869,6 +1098,89 @@ describe("recognition completeness", () => {
     }
     expect(events.some((event) => event.type === "discontinuity")).toBe(true);
     expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
+  it("accounts reconnect uncertainty in 16 kHz bytes", async () => {
+    let firstEpochBytes = 0;
+    server = new SpeechTestServer(({ socket, index }) => {
+      acknowledge(socket);
+      if (index === 0) {
+        socket.on("message", (data: Buffer, isBinary: boolean) => {
+          if (isBinary) {
+            firstEpochBytes += data.length;
+            socket.send(JSON.stringify({ type: "audioProgress", audioProcessedMs: 100 }));
+            socket.close(1011);
+          }
+        });
+        return;
+      }
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (!isBinary && data.toString().includes("endStream")) {
+          finishedTurn(socket, "Recovered sixteen.");
+        }
+      });
+    });
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const events: TranscriptEvent[] = [];
+    const outcome = await runTranscription({
+      source: pacedSource(10, 25, 16_000),
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async (event) => {
+        events.push(event);
+      },
+    });
+    expect(outcome.isOk()).toBe(true);
+    const sentMs = Math.round((firstEpochBytes / 32_000) * 1000);
+    const expected = Math.max(0, sentMs - 100);
+    const epochEvents = events.filter(
+      (event) => event.type === "discontinuity" && event.detail.includes("epoch 1 started"),
+    );
+    expect(epochEvents.length).toBe(1);
+    expect(epochEvents[0]?.type === "discontinuity" ? epochEvents[0].detail : "").toContain(
+      `${expected} ms of transmitted audio has uncertain processing coverage`,
+    );
+  });
+
+  it("completes input that becomes available after a reconnect", async () => {
+    server = new SpeechTestServer(({ socket, index }) => {
+      if (index === 0) {
+        acknowledge(socket);
+        socket.on("message", (_data: Buffer, isBinary: boolean) => {
+          if (isBinary) {
+            socket.close(1011);
+          }
+        });
+        return;
+      }
+      socket.once("message", () => {
+        setTimeout(() => socket.send(JSON.stringify({ sessionId: "delayed-second" })), 200);
+      });
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          return;
+        }
+        if (data.toString().includes("endStream")) {
+          finishedTurn(socket, "Completed after outage.");
+        }
+      });
+    });
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [50] });
+    const outcome = await runTranscription({
+      source: pacedSource(10, 25),
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isOk()).toBe(true);
+    if (outcome.isOk()) {
+      expect(outcome.value.finals).toBe(1);
+    }
+    expect(server.connections).toBe(2);
   });
 
   it("negotiates PCM_16KHZ for 16 kHz input", async () => {
@@ -1007,7 +1319,7 @@ describe("transcription continuity and cleanup", () => {
   });
 
   it("cleans up when the output consumer fails", async () => {
-    const source = sourceOf([formatItem(), audioItem(1, 0), endItem(2, 480)]);
+    const source = sourceOf([formatItem(), audioItem(1, 0), endItem(2, 1)]);
     const session = new FakeSpeechSession(async function* () {
       yield { type: "completed", turnRef: "1", text: "hi" };
     });
@@ -1100,6 +1412,63 @@ describe("transcription continuity and cleanup", () => {
     }
     await server.closed;
     expect(server.connections).toBe(1);
+  });
+
+  it("preserves primary and secondary cleanup failures", async () => {
+    const failing: CaptureSource & { stopSeen: boolean } = {
+      ...trackedSource([formatItem()]),
+      async *items(): AsyncIterable<SourceItem> {
+        yield formatItem();
+        throw appError("INTERNAL", "source exploded");
+      },
+      async dispose(): Promise<Result<void, AppError>> {
+        return err(appError("RESOURCE_RELEASE_FAILED", "source release failed"));
+      },
+    };
+    const session = new FakeSpeechSession(async function* () {});
+    session.terminateError = appError("RESOURCE_RELEASE_FAILED", "transport release failed");
+    const provider: SpeechProvider = {
+      providerId: "test",
+      modelId: "test",
+      openSession: async () => ok(session),
+    };
+    const outcome = await runTranscription({
+      source: failing,
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("INTERNAL");
+      expect(outcome.error.details?.["cleanup"]).toContain("RESOURCE_RELEASE_FAILED");
+    }
+    expect(session.terminated).toBe(true);
+  });
+
+  it("does not report success when provider cleanup fails", async () => {
+    const source = trackedSource([formatItem(), audioItem(1, 0), endItem(2, 1)]);
+    const session = new FakeSpeechSession(async function* () {});
+    session.terminateError = appError("RESOURCE_RELEASE_FAILED", "transport release failed");
+    const provider: SpeechProvider = {
+      providerId: "test",
+      modelId: "test",
+      openSession: async () => ok(session),
+    };
+    const outcome = await runTranscription({
+      source,
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    }
   });
 
   it("terminates the session when the source fails abnormally", async () => {

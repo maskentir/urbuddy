@@ -86,8 +86,13 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   protocol tests. The adapter enforces an inbound message bound
   plus a 1,024-event queue bound, a bounded outbound buffer
   (default 262,144 bytes, about five seconds at 24 kHz), handshake
-  and drain deadlines, and observed socket termination (explicit
-  terminate waits up to 2 s for the close to be observed). Sending never
+  and drain deadlines, a 5 s actual-send deadline, and observed
+  socket termination (explicit terminate waits up to 2 s for the
+  close to be observed). A timed-out send fails the session and
+  terminates the transport; termination reports success only when
+  closure is observed, otherwise an explicit release failure. One
+  session-owned combined AbortSignal backs every wait instead of
+  per-send signal combinations. Sending never
   claims provider processing; `audioProcessedMs` progress is the
   only processing evidence. A send callback only frees kernel
   buffer space; the adapter races it against session termination so
@@ -109,19 +114,32 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   (`1011`) and rate-limit (`1013`) closes during active input.
   Protocol rejections (`1008`), authentication failures, fatal
   provider errors, drain timeouts, explicit termination, and caller
-  cancellation never reconnect. No audio is replayed: Muse offers
-  no resume token and `audioProcessedMs` is processing progress,
-  not durable transcript coverage, so replaying the unacknowledged
-  tail could lose an unfinished utterance's semantic beginning or
-  duplicate context-deficient recognition. Instead a fresh epoch
-  resumes with new eligible audio in order, unresolved turns are
-  reported per utterance as incomplete evidence before the reducer
-  state is discarded, and every epoch boundary emits an explicit
-  discontinuity. A connection lost after end-of-input fails
+  cancellation never reconnect. Uncertainty is computed with the
+  negotiated encoding's bytes per second, not a fixed 24 kHz
+  assumption. No audio is replayed: Muse offers no resume token
+  and `audioProcessedMs` is processing progress, not durable
+  transcript coverage, so replaying the unacknowledged tail could
+  lose an unfinished utterance's semantic beginning or duplicate
+  context-deficient recognition. Instead a fresh epoch resumes with
+  new eligible audio in order, unresolved turns are reported per
+  utterance as incomplete evidence before the reducer state is
+  discarded, and every epoch boundary emits an explicit
+  discontinuity. End-of-input intent is recorded before waiting for
+  transport readiness, so a loss after input has ended fails
   finalization instead of opening a replacement connection.
   Exactly-once and seamless recovery are not claimed. Unresolved
   turns at normal closure are reported as uncertain coverage,
   never promoted to final.
+- The transcription operation owns one AbortController passed to
+  source iteration and the provider session; caller abort is
+  checked before startup and consumer failure aborts the operation
+  so a blocked producer settles promptly without waiting for the
+  next source item. Draining the event consumer races operation
+  cancellation so caller abort during finalization cannot hang.
+  Cleanup failures (source stop, provider termination, source
+  release) are preserved as secondary evidence alongside the
+  primary error; a failed provider cleanup turns even an otherwise
+  successful run into an explicit error, never a qualified Ok.
 - WAV input never trusts the declared extent: headers are scanned
   incrementally with a 1 MiB bound, the declared data range is
   validated against the actual file size and the RIFF container
