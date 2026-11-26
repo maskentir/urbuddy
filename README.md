@@ -105,6 +105,7 @@ pnpm ink-smoke
 | `src/kernel`           | Errors, identity, lifecycle, and shared primitives | [kernel](./src/kernel)             |
 | `src/modules/config`   | Validated session configuration                    | [config](./src/modules/config)     |
 | `src/modules/security` | Default-deny security policy                       | [security](./src/modules/security) |
+| `src/modules/session`  | Session runtime: ordering, revisions, gaps         | [session](./src/modules/session)   |
 | `src/platform`         | Infrastructure, logging, paths, and output         | [platform](./src/platform)         |
 | `src/presentation`     | Commander CLI and Ink terminal                     | [presentation](./src/presentation) |
 | `tests/`               | Behavioral verification                            | [tests](./tests)                   |
