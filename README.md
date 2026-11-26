@@ -13,7 +13,8 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 
 ## Status
 
-Application Foundation is merged (`0.1.0`); Core Runtime is next. See
+Application Foundation and Core Runtime are merged (`0.1.0`);
+Speech Perception (native audio acquisition) is next. See
 [docs/roadmap.md](./docs/roadmap.md) for milestones and acceptance gates.
 
 ## The problem
@@ -59,10 +60,11 @@ derived and rebuildable. Full design in
 
 ## Roadmap
 
-<p align="center"><img src="assets/brand/roadmap.svg" width="100%" alt="Roadmap. Foundation done, Core Runtime next, seven milestones planned." /></p>
+<p align="center"><img src="assets/brand/roadmap.svg" width="100%" alt="Roadmap. Foundation and Core Runtime done, Speech Perception next, six milestones planned." /></p>
 
-Foundation is done; Core Runtime (offline session replay, then
-durable persistence) is next. Tracked in
+Foundation and Core Runtime (offline session replay, durable
+persistence) are done; Speech Perception (native audio acquisition)
+is next. Tracked in
 [docs/roadmap.md](./docs/roadmap.md) with acceptance gates per
 milestone.
 
@@ -71,6 +73,8 @@ milestone.
 ### Requirements
 
 Node >= 24 (repo targets the Node 24 line; `.nvmrc` pins 24).
+Audio capture additionally needs macOS with Xcode command line tools
+(`swiftc`) and `pnpm native:build`.
 
 ### Quickstart
 
@@ -81,6 +85,8 @@ pnpm smoke
 pnpm doctor
 pnpm ink-smoke
 pnpm exec tsx src/bootstrap/main.ts replay fixtures/replay/basic.ndjson
+pnpm native:build # macOS only; builds the audio capture helper
+pnpm exec tsx src/bootstrap/main.ts capture --synthetic-frames 200 --duration 10 --allow-child
 ```
 
 ### Scripts
@@ -102,19 +108,22 @@ pnpm exec tsx src/bootstrap/main.ts replay fixtures/replay/basic.ndjson
 
 ### System Anatomy
 
-| Directory              | Responsibility                                     | Source                             |
-| ---------------------- | -------------------------------------------------- | ---------------------------------- |
-| `src/bootstrap`        | Composition root and application entry             | [bootstrap](./src/bootstrap)       |
-| `src/kernel`           | Errors, identity, lifecycle, and shared primitives | [kernel](./src/kernel)             |
-| `src/modules/config`   | Validated session configuration                    | [config](./src/modules/config)     |
-| `src/modules/security` | Default-deny security policy                       | [security](./src/modules/security) |
-| `src/modules/session`  | Session runtime: ordering, revisions, gaps         | [session](./src/modules/session)   |
-| `src/platform`         | Infrastructure, logging, paths, and output         | [platform](./src/platform)         |
-| `src/presentation`     | Commander CLI and Ink terminal                     | [presentation](./src/presentation) |
-| `tests/`               | Behavioral verification                            | [tests](./tests)                   |
-| `docs/`                | Canonical project knowledge and decisions          | [docs](./docs)                     |
-| `assets/brand/`        | Generated visual identity                          | [brand](./assets/brand)            |
-| `tooling/`             | Developer tooling and artwork generation           | [tooling](./tooling)               |
+| Directory                    | Responsibility                                           | Source                                        |
+| ---------------------------- | -------------------------------------------------------- | --------------------------------------------- |
+| `src/bootstrap`              | Composition root and application entry                   | [bootstrap](./src/bootstrap)                  |
+| `src/kernel`                 | Errors, identity, lifecycle, and shared primitives       | [kernel](./src/kernel)                        |
+| `src/modules/config`         | Validated session configuration                          | [config](./src/modules/config)                |
+| `src/modules/security`       | Default-deny security policy                             | [security](./src/modules/security)            |
+| `src/modules/session`        | Session runtime: ordering, revisions, gaps               | [session](./src/modules/session)              |
+| `src/modules/perception`     | Audio contracts and capture orchestration                | [perception](./src/modules/perception)        |
+| `src/adapters/audio`         | Native helper supervision and frame decoding             | [audio](./src/adapters/audio)                 |
+| `native/audio-capture-macos` | Swift Core Audio Tap helper (macOS, `pnpm native:build`) | [audio-capture](./native/audio-capture-macos) |
+| `src/platform`               | Infrastructure, logging, paths, and output               | [platform](./src/platform)                    |
+| `src/presentation`           | Commander CLI and Ink terminal                           | [presentation](./src/presentation)            |
+| `tests/`                     | Behavioral verification                                  | [tests](./tests)                              |
+| `docs/`                      | Canonical project knowledge and decisions                | [docs](./docs)                                |
+| `assets/brand/`              | Generated visual identity                                | [brand](./assets/brand)                       |
+| `tooling/`                   | Developer tooling and artwork generation                 | [tooling](./tooling)                          |
 
 Only implemented directories are listed. Planned modules stay out of
 this table until they exist. Implemented catalogs live in
@@ -133,13 +142,14 @@ security ceiling → validated session configuration.
 A profile can only restrict: no flag, variable, or profile grants a
 permission the ceiling denies. Forbidden grants fail fast.
 
-| Environment variable   | CLI override     |
-| ---------------------- | ---------------- |
-| `URBUDDY_PROFILE`      | `--profile`      |
-| `URBUDDY_LOG_LEVEL`    | `--log-level`    |
-| `URBUDDY_DATA_ROOT`    | `--data-root`    |
-| `URBUDDY_ALLOW_EGRESS` | `--allow-egress` |
-| `URBUDDY_ALLOW_CHILD`  | `--allow-child`  |
+| Environment variable   | CLI override                                                   |
+| ---------------------- | -------------------------------------------------------------- |
+| `URBUDDY_PROFILE`      | `--profile`                                                    |
+| `URBUDDY_LOG_LEVEL`    | `--log-level`                                                  |
+| `URBUDDY_DATA_ROOT`    | `--data-root`                                                  |
+| `URBUDDY_ALLOW_EGRESS` | `--allow-egress`                                               |
+| `URBUDDY_ALLOW_CHILD`  | `--allow-child`                                                |
+| `URBUDDY_AUDIO_HELPER` | (no flag; absolute path override for the native helper binary) |
 
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit
@@ -152,5 +162,14 @@ development/personal profiles only) and writes `evidence.sqlite`
 (WAL, synchronous FULL) under the data root. Add
 `--operation-id <id>` to make a persistent replay an idempotent retry
 of the same logical operation.
+
+Audio capture is opt-in per run: `capture --duration 30 --allow-child`
+runs the native helper (`native/audio-capture-macos`, macOS only)
+through the perception runtime with bounded buffering and explicit
+gap accounting. Real system audio additionally requires the macOS
+consent grant, approved in a GUI session; without it the run reports
+no signal instead of pretending silence. `--synthetic-frames N`
+exercises the same transport deterministically for tests and is
+always labeled as a transport test.
 
 <p align="center"><img src="assets/brand/footer.svg" width="100%" alt="Closing. Hear, understand, respond, evolve." /></p>

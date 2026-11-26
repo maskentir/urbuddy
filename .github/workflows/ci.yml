@@ -28,3 +28,20 @@ jobs:
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --json
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --persist --allow-native --operation-id ci-smoke --data-root /tmp/urbuddy-ci-data
       - run: pnpm audit --audit-level high
+
+  native-verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm native:build
+      - run: node dist/bootstrap/main.js doctor
+      - run: node dist/bootstrap/main.js capture --synthetic-frames 200 --duration 30 --allow-child
+      - run: node dist/bootstrap/main.js capture --synthetic-frames 5 --duration 10 --allow-child --json

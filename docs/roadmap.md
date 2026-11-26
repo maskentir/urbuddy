@@ -25,7 +25,7 @@ Acceptance gate: reviewed foundation merged. Met by
 [PR #1](https://github.com/maskentir/urbuddy/pull/1), squash-merged as
 `cd4e350`.
 
-## 2. Core Runtime — next
+## 2. Core Runtime — done
 
 Product outcome: an executable offline session replay that proves the
 runtime's streaming semantics before any live provider is involved,
@@ -43,13 +43,15 @@ PR:
 
 1. Executable offline session replay with recorded ordering, gap
    accounting, and cancellation behavior. This first replay PR is
-   not expanded with persistence work.
+   not expanded with persistence work. Met by
+   [PR #6](https://github.com/maskentir/urbuddy/pull/6).
 2. Durable persistence: SQLite evidence durability (per-database WAL
    and synchronous policy, commit acknowledgement, crash recovery)
    and transactional outbox semantics (enqueue, claim, retry without
-   loss or duplication).
+   loss or duplication). Met by
+   [PR #7](https://github.com/maskentir/urbuddy/pull/7).
 
-## 3. Speech Perception — planned
+## 3. Speech Perception — next
 
 Product outcome: real-time English transcription of live meetings,
 including accented and fast speech, with reconnect and gap accounting.
