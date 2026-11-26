@@ -9,8 +9,9 @@ import { Command, CommanderError } from "commander";
 import { match } from "ts-pattern";
 
 import { runInkSmoke } from "./ink-smoke.js";
+import { createStreamOutput } from "./output.js";
 import type { CliOutput } from "./output.js";
-import { runReplaySession } from "./replay.js";
+import type { ReplayPort } from "./replay.js";
 
 export interface CliDeps {
   readonly version: string;
@@ -20,6 +21,7 @@ export interface CliDeps {
   readonly correlationId: CorrelationId;
   readonly nowIso: string;
   readonly signal: AbortSignal;
+  readonly replayPort?: ReplayPort;
 }
 
 export interface DoctorCheck {
@@ -158,14 +160,7 @@ export function extractGlobalFlags(argv: readonly string[]): ConfigFlags {
 }
 
 function defaultOutput(): CliOutput {
-  return {
-    out: (line: string) => {
-      process.stdout.write(`${line}\n`);
-    },
-    errLine: (line: string) => {
-      process.stderr.write(`${line}\n`);
-    },
-  };
+  return createStreamOutput(process.stdout, process.stderr);
 }
 
 export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()): Command {
@@ -189,20 +184,20 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
   program
     .command("version")
     .description(commandHelp("version"))
-    .action(() => {
-      output.out(`urbuddy ${deps.version}`);
+    .action(async () => {
+      await output.out(`urbuddy ${deps.version}`);
     });
 
   program
     .command("doctor")
     .description(commandHelp("doctor"))
     .option("--json", "emit the report as stable JSON", false)
-    .action((options: { json: boolean }) => {
+    .action(async (options: { json: boolean }) => {
       const report = buildDoctorReport(deps);
       if (options.json) {
-        output.out(toStableJson(report));
+        await output.out(toStableJson(report));
       } else {
-        output.out(formatDoctorText(report));
+        await output.out(formatDoctorText(report));
       }
       if (!report.ok) {
         throw new Error("doctor checks failing");
@@ -215,7 +210,10 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
     .argument("<fixture>", "path to a synthetic NDJSON transcript fixture")
     .option("--json", "emit one stable JSON object per line", false)
     .action(async (fixture: string, options: { json: boolean }) => {
-      const result = await runReplaySession({
+      if (deps.replayPort === undefined) {
+        throw new Error("replay is not wired");
+      }
+      const result = await deps.replayPort({
         fixture,
         json: options.json,
         signal: deps.signal,
@@ -242,7 +240,7 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
         if (result.isErr()) {
           throw result.error;
         }
-        output.out(stripFormatting(`ink smoke ok (session ${deps.sessionId})`));
+        await output.out(stripFormatting(`ink smoke ok (session ${deps.sessionId})`));
         return;
       }
       program.help();

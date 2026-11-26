@@ -2,17 +2,19 @@ import { toAppError, type AppError } from "@kernel/errors";
 import { type ReplaySummary, type SessionOutput } from "@modules/session/events";
 import { SessionRuntime } from "@modules/session/runtime";
 import { openLineSource } from "@platform/fixture";
-import { stripFormatting, toStableJson } from "@platform/output";
+import { stripFormatting } from "@platform/output";
 import { err, type Result } from "neverthrow";
 
 import type { CliOutput } from "./output.js";
 
-export interface ReplayInput {
+interface ReplayInput {
   readonly fixture: string;
   readonly json: boolean;
   readonly signal: AbortSignal;
   readonly output: CliOutput;
 }
+
+export type ReplayPort = (input: ReplayInput) => Promise<Result<ReplaySummary, AppError>>;
 
 function formatReplayEvent(event: SessionOutput): string {
   switch (event.type) {
@@ -31,21 +33,22 @@ function formatReplayEvent(event: SessionOutput): string {
   }
 }
 
-export async function runReplaySession(
-  input: ReplayInput,
-): Promise<Result<ReplaySummary, AppError>> {
-  const source = openLineSource(input.fixture);
+export const runReplaySession: ReplayPort = async (input) => {
+  const opened = await openLineSource(input.fixture);
+  if (opened.isErr()) {
+    return err(opened.error);
+  }
   const runtime = new SessionRuntime();
   try {
     return await runtime.run(
-      source,
-      (event) => {
-        const line = input.json ? toStableJson(event) : stripFormatting(formatReplayEvent(event));
-        input.output.out(line);
+      opened.value,
+      async (event) => {
+        const line = input.json ? JSON.stringify(event) : stripFormatting(formatReplayEvent(event));
+        await input.output.out(line);
       },
       { signal: input.signal },
     );
   } catch (thrown: unknown) {
     return err(toAppError(thrown, "replay failed"));
   }
-}
+};

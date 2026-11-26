@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,10 @@ import { EXIT_CODES } from "@kernel/exit-codes";
 import { createDeterministicIdGenerator } from "@kernel/ids";
 import { type ReplaySummary, type SessionOutput } from "@modules/session/events";
 import { SessionRuntime, type ReplaySource } from "@modules/session/runtime";
+import { openLineSource } from "@platform/fixture";
 import { exitCodeForError, runCli, type CliDeps } from "@presentation/cli";
 import type { CliOutput } from "@presentation/output";
+import { runReplaySession } from "@presentation/replay";
 import type { Result } from "neverthrow";
 import { describe, expect, it } from "vitest";
 
@@ -73,7 +75,13 @@ function sourceOf(
 
 async function collect(
   source: ReplaySource,
-  options?: { signal?: AbortSignal; maxUtterances?: number; slowSinkMs?: number },
+  options?: {
+    signal?: AbortSignal;
+    maxUtterances?: number;
+    maxTextBytes?: number;
+    maxIdBytes?: number;
+    slowSinkMs?: number;
+  },
 ): Promise<{ outputs: SessionOutput[]; outcome: Result<ReplaySummary, AppError> }> {
   const outputs: SessionOutput[] = [];
   const runtime = new SessionRuntime();
@@ -88,6 +96,8 @@ async function collect(
     {
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
       ...(options?.maxUtterances === undefined ? {} : { maxUtterances: options.maxUtterances }),
+      ...(options?.maxTextBytes === undefined ? {} : { maxTextBytes: options.maxTextBytes }),
+      ...(options?.maxIdBytes === undefined ? {} : { maxIdBytes: options.maxIdBytes }),
     },
   );
   return { outputs, outcome };
@@ -174,7 +184,7 @@ describe("session replay semantics", () => {
     });
   });
 
-  it("reports sequence gaps and still applies late arrivals", async () => {
+  it("reports sequence gaps and rejects late arrivals as stale", async () => {
     const source = sourceOf([
       event({ seq: 0, utteranceId: "u1", revision: 0, text: "a" }),
       event({ seq: 2, utteranceId: "u1", revision: 1, text: "a b" }),
@@ -182,8 +192,9 @@ describe("session replay semantics", () => {
     ]);
     const { outputs } = await collect(source);
     expect(outputs).toContainEqual({ type: "gap", from: 1, to: 2 });
+    expect(outputs[outputs.length - 2]).toMatchObject({ type: "stale", reason: "superseded" });
     expect(summaryOf(outputs)).toMatchObject({
-      summary: { applied: 3, gaps: 1, missing: 1 },
+      summary: { applied: 2, stale: 1, gaps: 1, missing: 1 },
     });
   });
 
@@ -339,6 +350,7 @@ function testDeps(signal?: AbortSignal): CliDeps {
     correlationId: created.correlationId,
     nowIso: created.clock.isoNow(),
     signal: signal ?? new AbortController().signal,
+    replayPort: runReplaySession,
   };
 }
 
@@ -392,7 +404,7 @@ describe("replay command", () => {
     expect(code).toBe(EXIT_CODES.success);
     expect(captured.lines).toContain("[gap] missing seq 1..1");
     expect(captured.lines.at(-1)).toBe(
-      "replay complete: applied=4 duplicates=1 stale=2 gaps=1 missing=1",
+      "replay complete: applied=3 duplicates=1 stale=3 gaps=1 missing=1",
     );
   });
 
@@ -441,6 +453,7 @@ describe("replay command", () => {
     await runCli(["node", "urbuddy", "replay", path], testDeps(), second.output);
     expect(first.lines).toEqual(second.lines);
     expect(readFileSync(path, "utf8").split("\n").filter(Boolean)).toHaveLength(30);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("maps a pre-aborted replay to the cancelled error", async () => {
@@ -455,5 +468,200 @@ describe("replay command", () => {
       ),
     ).rejects.toMatchObject({ code: "CANCELLED" });
     expect(exitCodeForError(appError("CANCELLED", "x"))).toBe(EXIT_CODES.cancelled);
+  });
+
+  it("emits one compact JSON object per physical line", async () => {
+    const captured = capture();
+    await runCli(
+      ["node", "urbuddy", "replay", fixture("gaps.ndjson"), "--json"],
+      testDeps(),
+      captured.output,
+    );
+    for (const line of captured.lines) {
+      expect(line.startsWith("{")).toBe(true);
+      expect(() => JSON.parse(line) as unknown).not.toThrow();
+    }
+  });
+});
+
+describe("review regressions", () => {
+  it("applies same-text partial-to-final transition and finalizes", async () => {
+    const source = sourceOf([
+      event({ seq: 0, revision: 0, text: "hello" }),
+      event({ seq: 1, kind: "final", revision: 0, text: "hello" }),
+      event({ seq: 2, revision: 1, text: "hello again" }),
+    ]);
+    const { outputs } = await collect(source);
+    expect(outputs.filter((o) => o.type === "applied")).toHaveLength(2);
+    expect(outputs[outputs.length - 2]).toMatchObject({ type: "stale", reason: "finalized" });
+    expect(summaryOf(outputs)).toMatchObject({ summary: { applied: 2, duplicates: 0, stale: 1 } });
+  });
+
+  it("classifies identical final retransmission as duplicate, contradictory as stale", async () => {
+    const dup = await collect(
+      sourceOf([
+        event({ seq: 0, kind: "final", revision: 1, text: "done." }),
+        event({ seq: 1, kind: "final", revision: 1, text: "done." }),
+      ]),
+    );
+    expect(summaryOf(dup.outputs)).toMatchObject({
+      summary: { applied: 1, duplicates: 1, stale: 0 },
+    });
+    const contra = await collect(
+      sourceOf([
+        event({ seq: 0, kind: "final", revision: 1, text: "done." }),
+        event({ seq: 1, kind: "final", revision: 1, text: "changed." }),
+      ]),
+    );
+    expect(contra.outputs[contra.outputs.length - 2]).toMatchObject({
+      type: "stale",
+      reason: "finalized",
+    });
+  });
+
+  it("rejects conflicting reuse of the same sequence", async () => {
+    const { outcome } = await collect(
+      sourceOf([
+        event({ seq: 0, utteranceId: "u1", text: "a" }),
+        event({ seq: 0, utteranceId: "u2", text: "x" }),
+      ]),
+    );
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("VALIDATION_FAILED");
+    }
+  });
+
+  it("counts exact sequence retransmission as duplicate", async () => {
+    const { outputs } = await collect(sourceOf([event({ seq: 0 }), event({ seq: 0 })]));
+    expect(summaryOf(outputs)).toMatchObject({ summary: { applied: 1, duplicates: 1 } });
+  });
+
+  it("enforces byte bounds on text and identifiers", async () => {
+    const okRun = await collect(sourceOf([event({ text: "éé" })]), { maxTextBytes: 4 });
+    expect(okRun.outcome.isOk()).toBe(true);
+    const overText = await collect(sourceOf([event({ text: "ééé" })]), { maxTextBytes: 4 });
+    expect(overText.outcome.isErr()).toBe(true);
+    const overId = await collect(sourceOf([event({ utteranceId: "ééé" })]), { maxIdBytes: 4 });
+    expect(overId.outcome.isErr()).toBe(true);
+  });
+
+  it("rejects invalid resource limit options", async () => {
+    const { outcome } = await collect(sourceOf([event({})]), { maxUtterances: 0 });
+    expect(outcome.isErr()).toBe(true);
+  });
+
+  it("preserves the primary failure when disposal also fails", async () => {
+    const source: ReplaySource = {
+      events: {
+        [Symbol.asyncIterator]() {
+          return {
+            next: async (): Promise<IteratorResult<unknown>> => {
+              throw appError("INTERNAL", "disk gone");
+            },
+          };
+        },
+      },
+      dispose: async (): Promise<void> => {
+        throw new Error("cleanup boom");
+      },
+    };
+    const { outcome } = await collect(source);
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.message).toBe("disk gone");
+    }
+  });
+
+  it("reports cleanup failure after an otherwise successful run", async () => {
+    const inner = sourceOf([event({})]);
+    const source: ReplaySource = {
+      events: inner.events,
+      dispose: async (): Promise<void> => {
+        throw new Error("cleanup boom s3cr3t");
+      },
+    };
+    const { outcome } = await collect(source);
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.message).toBe("replay cleanup failed");
+      expect(outcome.error.message).not.toContain("s3cr3t");
+    }
+  });
+
+  it("does not complete when cancellation lands at the end boundary", async () => {
+    const controller = new AbortController();
+    const source = sourceOf([event({ seq: 0 })]);
+    const outputs: SessionOutput[] = [];
+    const runtime = new SessionRuntime();
+    const outcome = await runtime.run(
+      source,
+      (output) => {
+        outputs.push(output);
+        controller.abort();
+      },
+      { signal: controller.signal },
+    );
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("CANCELLED");
+    }
+    expect(outputs.some((o) => o.type === "completed")).toBe(false);
+  });
+
+  it("isolates concurrent sessions", async () => {
+    const make = (session: string) =>
+      sourceOf(
+        Array.from({ length: 8 }, (_, i) =>
+          event({ sessionId: session, seq: i, utteranceId: `u${i}`, text: `${session}-${i}` }),
+        ),
+      );
+    const [a, b] = await Promise.all([
+      collect(make("a"), { slowSinkMs: 2 }),
+      collect(make("b"), { slowSinkMs: 1 }),
+    ]);
+    expect(summaryOf(a.outputs)).toMatchObject({ summary: { sessionId: "a", applied: 8 } });
+    expect(summaryOf(b.outputs)).toMatchObject({ summary: { sessionId: "b", applied: 8 } });
+  });
+
+  it("rejects non-regular fixture inputs and hides raw paths", async () => {
+    const opened = await openLineSource(join(root, "fixtures"));
+    expect(opened.isErr()).toBe(true);
+    const missing = await openLineSource(join(root, "fixtures", "replay", "absent.ndjson"));
+    expect(missing.isErr()).toBe(true);
+    if (missing.isErr()) {
+      expect(missing.error.message).not.toContain("absent");
+      expect(JSON.stringify(missing.error)).not.toContain("absent");
+    }
+  });
+
+  it("closes the file source idempotently", async () => {
+    const opened = await openLineSource(fixture("basic.ndjson"));
+    expect(opened.isOk()).toBe(true);
+    if (opened.isOk()) {
+      await opened.value.dispose();
+      await opened.value.dispose();
+    }
+  });
+
+  it("reports the correct malformed JSON line number", async () => {
+    const captured = capture();
+    await expect(
+      runCli(
+        ["node", "urbuddy", "replay", fixture("malformed.ndjson")],
+        testDeps(),
+        captured.output,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    const viaPort = await runReplaySession({
+      fixture: fixture("malformed.ndjson"),
+      json: false,
+      signal: new AbortController().signal,
+      output: capture().output,
+    });
+    expect(viaPort.isErr()).toBe(true);
+    if (viaPort.isErr()) {
+      expect(viaPort.error.message).toBe("replay fixture line 2 is not valid JSON");
+    }
   });
 });

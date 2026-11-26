@@ -78,6 +78,7 @@ pnpm check
 pnpm smoke
 pnpm doctor
 pnpm ink-smoke
+pnpm exec tsx src/bootstrap/main.ts replay fixtures/replay/basic.ndjson
 ```
 
 ### Scripts

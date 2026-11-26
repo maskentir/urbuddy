@@ -18,6 +18,7 @@ import { effectivePolicy, type SecurityPolicy } from "@modules/security/policy";
 import { createLogger, type Logger } from "@platform/logging";
 import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
+import { runReplaySession } from "@presentation/replay";
 
 import { URBUDDY_VERSION } from "./version.js";
 
@@ -104,6 +105,7 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     correlationId: app.correlationId,
     nowIso: app.clock.isoNow(),
     signal,
+    replayPort: runReplaySession,
   };
 }
 
