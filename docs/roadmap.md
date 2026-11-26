@@ -63,8 +63,17 @@ technical vocabulary handling, reconnect and gap accounting.
 
 Non-goals: translation, meeting recording for its own sake.
 
-Acceptance gate: real-time English transcription within the latency
-and loss budgets defined in [architecture](./architecture.md).
+Acceptance gates, in order, each through a separate implementation
+PR:
+
+1. Native macOS audio acquisition with explicit continuity and
+   lifecycle semantics. Met by
+   [PR #8](https://github.com/maskentir/urbuddy/pull/8).
+2. Streaming speech recognition: real-time English transcription
+   within the latency and loss budgets defined in
+   [architecture](./architecture.md). Implemented against a local
+   protocol server; live provider acceptance remains pending
+   owner-authorized execution.
 
 ## 4. Live Language Engine — planned
 

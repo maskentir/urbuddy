@@ -150,6 +150,7 @@ Do not remove essential information solely to satisfy a cosmetic rule.
 - Do not recreate general-purpose linters inside application tests.
 - Avoid tests that merely assert implementation shape or trivial third-party behavior.
 - Never weaken assertions to obtain passing results.
+- Treat flaky tests as evidence of an uncontrolled defect: find the root cause (lifecycle ownership, synchronization, environment assumptions) before changing the test. Prefer explicit synchronization, controlled clocks, observable state transitions, and deterministic fixtures over sleeps, retries, timeout increases, swallowed errors, or platform exclusions. Verify the test fails for the intended broken behavior and passes after the correction; repeated success is supporting evidence, not proof. Clean up test resources even when assertions fail.
 - Separate deterministic tests from live, paid, native, and long-running qualification.
 - Report only verification that actually executed.
 

@@ -6,12 +6,13 @@ review-blocking defect.
 
 ## Commands (`src/kernel/commands.ts`)
 
-| name                                                     | enforced by                                                                                |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `doctor [--json]`                                        | commander action in `cli.ts`                                                               |
-| `version`                                                | commander action in `cli.ts`                                                               |
-| `replay [--json] [--persist] <fx>`                       | commander action in `cli.ts`, runtime in `session`                                         |
-| `capture [--duration s] [--synthetic-frames N] [--json]` | commander action in `cli.ts`, orchestration in `perception`, transport in `adapters/audio` |
+| name                                                         | enforced by                                                                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `doctor [--json]`                                            | commander action in `cli.ts`                                                                       |
+| `version`                                                    | commander action in `cli.ts`                                                                       |
+| `replay [--json] [--persist] <fx>`                           | commander action in `cli.ts`, runtime in `session`                                                 |
+| `capture [--duration s] [--synthetic-frames N] [--json]`     | commander action in `cli.ts`, orchestration in `perception`, transport in `adapters/audio`         |
+| `transcribe [--file wav] [--mode m] [--keywords t] [--json]` | commander action in `cli.ts`, orchestration in `perception/speech`, transport in `adapters/speech` |
 
 Commander owns argument parsing. The typed catalog holds the command
 names (`COMMAND_NAMES`) and their help text (`commandHelp`); every
@@ -22,7 +23,11 @@ the session runtime against synthetic NDJSON fixtures; it never
 touches live providers. `capture` runs the native audio helper
 through the perception runtime with bounded buffering and explicit
 gap accounting; it requires child-process authorization and performs
-no network egress or audio persistence.
+no network egress or audio persistence. `transcribe` streams audio
+(native capture or a paced local WAV) to the Muse provider through
+the perception speech operation; it requires egress authorization,
+plus child-process authorization for live capture, and keeps audio
+and transcripts ephemeral.
 
 ## Exit codes (`src/kernel/exit-codes.ts`)
 

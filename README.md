@@ -14,7 +14,9 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 ## Status
 
 Application Foundation and Core Runtime are merged (`0.1.0`);
-Speech Perception (native audio acquisition) is next. See
+Speech Perception native audio acquisition is merged, and streaming
+speech recognition is implemented against a local protocol server
+(live provider acceptance pending owner authorization). See
 [docs/roadmap.md](./docs/roadmap.md) for milestones and acceptance gates.
 
 ## The problem
@@ -63,8 +65,8 @@ derived and rebuildable. Full design in
 <p align="center"><img src="assets/brand/roadmap.svg" width="100%" alt="Roadmap. Foundation and Core Runtime done, Speech Perception next, six milestones planned." /></p>
 
 Foundation and Core Runtime (offline session replay, durable
-persistence) are done; Speech Perception (native audio acquisition)
-is next. Tracked in
+persistence) are done; Speech Perception native audio acquisition is
+merged and streaming speech recognition is in review. Tracked in
 [docs/roadmap.md](./docs/roadmap.md) with acceptance gates per
 milestone.
 
@@ -87,6 +89,9 @@ pnpm ink-smoke
 pnpm exec tsx src/bootstrap/main.ts replay fixtures/replay/basic.ndjson
 pnpm native:build # macOS only; builds the audio capture helper
 pnpm exec tsx src/bootstrap/main.ts capture --synthetic-frames 200 --duration 10 --allow-child
+# Streaming transcription needs a credential and explicit egress. WAV
+# input is paced as a live stream; live capture also needs --allow-child.
+MODEL_API_KEY=<key> pnpm exec tsx src/bootstrap/main.ts transcribe --file <wav> --allow-egress
 ```
 
 ### Scripts
@@ -117,6 +122,7 @@ pnpm exec tsx src/bootstrap/main.ts capture --synthetic-frames 200 --duration 10
 | `src/modules/session`        | Session runtime: ordering, revisions, gaps               | [session](./src/modules/session)              |
 | `src/modules/perception`     | Audio contracts and capture orchestration                | [perception](./src/modules/perception)        |
 | `src/adapters/audio`         | Native helper supervision and frame decoding             | [audio](./src/adapters/audio)                 |
+| `src/adapters/speech`        | Muse streaming speech provider (WebSocket)               | [speech](./src/adapters/speech)               |
 | `native/audio-capture-macos` | Swift Core Audio Tap helper (macOS, `pnpm native:build`) | [audio-capture](./native/audio-capture-macos) |
 | `src/platform`               | Infrastructure, logging, paths, and output               | [platform](./src/platform)                    |
 | `src/presentation`           | Commander CLI and Ink terminal                           | [presentation](./src/presentation)            |
