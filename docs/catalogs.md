@@ -6,11 +6,12 @@ review-blocking defect.
 
 ## Commands (`src/kernel/commands.ts`)
 
-| name                               | enforced by                                        |
-| ---------------------------------- | -------------------------------------------------- |
-| `doctor [--json]`                  | commander action in `cli.ts`                       |
-| `version`                          | commander action in `cli.ts`                       |
-| `replay [--json] [--persist] <fx>` | commander action in `cli.ts`, runtime in `session` |
+| name                                                     | enforced by                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `doctor [--json]`                                        | commander action in `cli.ts`                                                               |
+| `version`                                                | commander action in `cli.ts`                                                               |
+| `replay [--json] [--persist] <fx>`                       | commander action in `cli.ts`, runtime in `session`                                         |
+| `capture [--duration s] [--synthetic-frames N] [--json]` | commander action in `cli.ts`, orchestration in `perception`, transport in `adapters/audio` |
 
 Commander owns argument parsing. The typed catalog holds the command
 names (`COMMAND_NAMES`) and their help text (`commandHelp`); every
@@ -18,7 +19,10 @@ command registration consumes it, so a catalog entry without a
 handler is a visible defect. `help` is provided by commander itself
 and is intentionally outside the typed catalog. `replay` exercises
 the session runtime against synthetic NDJSON fixtures; it never
-touches live providers.
+touches live providers. `capture` runs the native audio helper
+through the perception runtime with bounded buffering and explicit
+gap accounting; it requires child-process authorization and performs
+no network egress or audio persistence.
 
 ## Exit codes (`src/kernel/exit-codes.ts`)
 

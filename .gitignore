@@ -2,3 +2,4 @@ node_modules
 dist
 coverage
 *.tsbuildinfo
+native/audio-capture-macos/bin/

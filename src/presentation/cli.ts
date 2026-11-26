@@ -1,5 +1,5 @@
 import { commandHelp } from "@kernel/commands";
-import { toAppError, type AppError, type ErrorCode } from "@kernel/errors";
+import { appError, toAppError, type AppError, type ErrorCode } from "@kernel/errors";
 import { EXIT_CODES, type ExitCode } from "@kernel/exit-codes";
 import type { CorrelationId, SessionId } from "@kernel/ids";
 import type { ConfigFlags, ImmutableSessionConfig } from "@modules/config/loader";
@@ -8,6 +8,7 @@ import type { AppPaths } from "@platform/paths";
 import { Command, CommanderError } from "commander";
 import { match } from "ts-pattern";
 
+import type { CaptureInput, CapturePort } from "./capture.js";
 import { runInkSmoke } from "./ink-smoke.js";
 import { createStreamOutput } from "./output.js";
 import type { CliOutput } from "./output.js";
@@ -22,6 +23,7 @@ export interface CliDeps {
   readonly nowIso: string;
   readonly signal: AbortSignal;
   readonly replayPort?: ReplayPort;
+  readonly capturePort?: CapturePort;
 }
 
 export interface DoctorCheck {
@@ -201,6 +203,52 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
       }
       if (!report.ok) {
         throw new Error("doctor checks failing");
+      }
+    });
+
+  program
+    .command("capture")
+    .description(commandHelp("capture"))
+    .option("--duration <seconds>", "capture duration in seconds (1 to 300)", "10")
+    .option(
+      "--synthetic-frames <count>",
+      "use synthetic transport-test frames instead of system audio",
+      "0",
+    )
+    .option("--json", "emit one stable JSON object per line", false)
+    .action(async (options: { duration: string; syntheticFrames: string; json: boolean }) => {
+      if (deps.capturePort === undefined) {
+        throw new Error("capture is not wired");
+      }
+      if (!/^\d+$/.test(options.duration)) {
+        throw appError("VALIDATION_FAILED", "capture duration must be 1 to 300 seconds");
+      }
+      const durationSeconds = Number.parseInt(options.duration, 10);
+      if (!Number.isSafeInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 300) {
+        throw appError("VALIDATION_FAILED", "capture duration must be 1 to 300 seconds");
+      }
+      if (!/^\d+$/.test(options.syntheticFrames)) {
+        throw appError("VALIDATION_FAILED", "synthetic frame count must be 0 to 100000");
+      }
+      const syntheticFrames = Number.parseInt(options.syntheticFrames, 10);
+      if (
+        !Number.isSafeInteger(syntheticFrames) ||
+        syntheticFrames < 0 ||
+        syntheticFrames > 100_000
+      ) {
+        throw appError("VALIDATION_FAILED", "synthetic frame count must be 0 to 100000");
+      }
+      const captureInput: CaptureInput = {
+        durationMs: durationSeconds * 1000,
+        syntheticFrames,
+        json: options.json,
+        signal: deps.signal,
+        output,
+        env: process.env,
+      };
+      const result = await deps.capturePort(captureInput);
+      if (result.isErr()) {
+        throw result.error;
       }
     });
 

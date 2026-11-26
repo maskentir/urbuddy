@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
+import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capture-source";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -17,12 +18,14 @@ import {
   type ConfigFlags,
   type ImmutableSessionConfig,
 } from "@modules/config/loader";
+import { runCaptureSession } from "@modules/perception/audio";
 import { effectivePolicy, isPermitted, type SecurityPolicy } from "@modules/security/policy";
 import type { EvidencePersistence } from "@modules/session/persistence";
 import { runReplay } from "@modules/session/replay";
 import { openLineSource } from "@platform/fixture";
 import { createLogger, type Logger } from "@platform/logging";
 import { resolveAppPaths, type AppPaths } from "@platform/paths";
+import { createCapturePort } from "@presentation/capture";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
 import { err, ok, type Result } from "neverthrow";
@@ -113,6 +116,13 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     correlationId: app.correlationId,
     nowIso: app.clock.isoNow(),
     signal,
+    capturePort: createCapturePort({
+      runSession: runCaptureSession,
+      clock: app.clock,
+      ...(isPermitted(app.policy, "spawn-child-process")
+        ? { spawnSource: spawnAudioSource, resolveHelper: resolveBundledHelperPath }
+        : {}),
+    }),
     replayPort: createReplayPort({
       runOperation: runReplay,
       openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
