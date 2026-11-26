@@ -20,10 +20,18 @@ export type ReplayPort = (input: ReplayInput) => Promise<Result<ReplaySummary, A
 
 export interface ReplayDeps {
   readonly runOperation: typeof runReplay;
-  readonly fingerprintFixture?: (
+  readonly openFingerprintedSource?: (
     fixture: string,
     signal: AbortSignal,
-  ) => Promise<Result<string, AppError>>;
+  ) => Promise<
+    Result<
+      {
+        fingerprint: string;
+        source: { readonly events: AsyncIterable<unknown>; dispose(): Promise<void> };
+      },
+      AppError
+    >
+  >;
   readonly openSource: (
     fixture: string,
     signal: AbortSignal,
@@ -69,7 +77,7 @@ export function createReplayPort(deps: ReplayDeps): ReplayPort {
           signal: input.signal,
         });
       }
-      if (deps.openPersistence === undefined || deps.fingerprintFixture === undefined) {
+      if (deps.openPersistence === undefined || deps.openFingerprintedSource === undefined) {
         return err(
           appError("VALIDATION_FAILED", "persistence requires native module authorization"),
         );
@@ -85,21 +93,18 @@ export function createReplayPort(deps: ReplayDeps): ReplayPort {
             : `operation: ${operationId}`,
         );
       }
-      const fingerprint = await deps.fingerprintFixture(input.fixture, input.signal);
-      if (fingerprint.isErr()) {
-        return err(fingerprint.error);
-      }
-      const opened = await deps.openSource(input.fixture, input.signal);
+      const opened = await deps.openFingerprintedSource(input.fixture, input.signal);
       if (opened.isErr()) {
         return err(opened.error);
       }
+      const fingerprint = { value: opened.value.fingerprint };
       const storeResult = await deps.openPersistence();
       if (storeResult.isErr()) {
-        await opened.value.dispose().catch(() => undefined);
+        await opened.value.source.dispose().catch(() => undefined);
         return err(storeResult.error);
       }
       return await deps.runOperation({
-        source: opened.value,
+        source: opened.value.source,
         sink: emit,
         signal: input.signal,
         persistence: storeResult.value,

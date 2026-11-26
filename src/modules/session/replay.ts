@@ -117,12 +117,6 @@ async function runPersistent(
       if (event.type === "applied") {
         if (identity === undefined) {
           identity = { sessionId: event.sessionId, streamId: event.streamId };
-          if (mode !== "verify") {
-            for (const gap of pendingGaps) {
-              await recordGapBound(gap.from, gap.to);
-            }
-          }
-          pendingGaps.length = 0;
         }
         const applied = {
           sessionId: event.sessionId,
@@ -143,6 +137,12 @@ async function runPersistent(
         if (recorded.isErr()) {
           throw recorded.error;
         }
+        if (mode !== "verify") {
+          for (const gap of pendingGaps) {
+            await recordGapBound(gap.from, gap.to);
+          }
+        }
+        pendingGaps.length = 0;
       } else if (event.type === "gap" && mode !== "verify") {
         if (identity === undefined) {
           pendingGaps.push({ from: event.from, to: event.to });

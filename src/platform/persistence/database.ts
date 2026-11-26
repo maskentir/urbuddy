@@ -1,4 +1,14 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,11 +89,19 @@ export function openEvidenceDatabase(
         return err(failure("evidence database path must not be a symlink"));
       }
     }
-    const dbPath = join(realpathSync(dir), basename(path));
+    const realDir = realpathSync(dir);
+    if ((statSync(realDir).mode & 0o077) !== 0) {
+      return err(failure("evidence directory permissions are too open"));
+    }
+    const dbPath = join(realDir, basename(path));
     const folder = migrationsFolder();
     if (folder === undefined) {
       return err(appError("INTERNAL", "evidence migrations are unavailable"));
     }
+    if (!existsSync(dbPath)) {
+      closeSync(openSync(dbPath, "wx", 0o600));
+    }
+    chmodSync(dbPath, 0o600);
     sqlite = new Database(dbPath);
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("synchronous = FULL");

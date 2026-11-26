@@ -209,6 +209,15 @@ export function recordGap(
   input: { opId: string; sessionId: string; streamId: string; fromSeq: number; toSeq: number },
 ): Result<void, AppError> {
   try {
+    const operation = operationOf(handle, input.opId);
+    if (
+      operation === undefined ||
+      operation.status !== "running" ||
+      operation.sessionId !== input.sessionId ||
+      operation.streamId !== input.streamId
+    ) {
+      return err(invalid("evidence does not belong to the admitted operation"));
+    }
     handle.db.insert(evidenceGaps).values(input).onConflictDoNothing().run();
     return ok(undefined);
   } catch (thrown: unknown) {

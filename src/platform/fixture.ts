@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
@@ -100,11 +101,7 @@ async function* readLines(
   }
 }
 
-export async function openLineSource(
-  path: string,
-  options: LineSourceOptions = {},
-): Promise<Result<LineSource, AppError>> {
-  const maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
+async function acquireFixture(path: string): Promise<Result<FileHandle, AppError>> {
   let handle: FileHandle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
@@ -121,6 +118,61 @@ export async function openLineSource(
     await handle.close().catch(() => undefined);
     return err(fixtureFailure("cannot read replay fixture"));
   }
+  return ok(handle);
+}
+
+export async function openFingerprintedFixture(
+  path: string,
+  options: LineSourceOptions = {},
+): Promise<Result<{ fingerprint: string; source: LineSource }, AppError>> {
+  const acquired = await acquireFixture(path);
+  if (acquired.isErr()) {
+    return err(acquired.error);
+  }
+  const handle = acquired.value;
+  const hash = createHash("sha256");
+  const hashStream = handle.createReadStream({ start: 0, autoClose: false });
+  const onAbort = (): void => {
+    hashStream.destroy();
+  };
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      hashStream.destroy();
+    } else {
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+  try {
+    for await (const chunk of hashStream) {
+      hash.update(chunk as Buffer);
+    }
+  } catch {
+    await handle.close().catch(() => undefined);
+    return err(fixtureFailure("cannot read replay fixture"));
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+  if (options.signal?.aborted === true) {
+    await handle.close().catch(() => undefined);
+    return err(appError("CANCELLED", "replay cancelled"));
+  }
+  const source = lineSourceFromHandle(handle, options);
+  return ok({ fingerprint: hash.digest("hex"), source });
+}
+
+export async function openLineSource(
+  path: string,
+  options: LineSourceOptions = {},
+): Promise<Result<LineSource, AppError>> {
+  const acquired = await acquireFixture(path);
+  if (acquired.isErr()) {
+    return err(acquired.error);
+  }
+  return ok(lineSourceFromHandle(acquired.value, options));
+}
+
+function lineSourceFromHandle(handle: FileHandle, options: LineSourceOptions): LineSource {
+  const maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
   const stream = handle.createReadStream();
   const onAbort = (): void => {
     stream.destroy();
@@ -133,7 +185,7 @@ export async function openLineSource(
     }
   }
   let disposed = false;
-  return ok({
+  return {
     events: readLines(stream, maxLineBytes),
     dispose: async (): Promise<void> => {
       if (disposed) {
@@ -163,5 +215,5 @@ export async function openLineSource(
         throw firstError;
       }
     },
-  });
+  };
 }

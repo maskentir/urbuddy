@@ -350,6 +350,8 @@ describe("persist integration", () => {
     const afterKill = openStore(dir);
     const partial = countEvidence(afterKill);
     expect(partial).toBeGreaterThan(0);
+    const durableSeqs = listEvidence(afterKill, "s-crash").map((row) => row.seq);
+    expect(durableSeqs).toEqual(Array.from({ length: partial }, (_, i) => i));
     afterKill.close();
     const retry = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
@@ -376,6 +378,87 @@ describe("persist integration", () => {
 });
 
 describe("admission and migration regressions", () => {
+  it("rejects incompatible retry of a running operation without mutation", () => {
+    const store = openStore(tempDir());
+    recordEvent(store, ev());
+    const retry = admitOperation(store, "op-1", "fp-different");
+    expect(retry.isErr()).toBe(true);
+    expect(countEvidence(store)).toBe(1);
+    expect(countJobs(store)).toBe(0);
+    store.close();
+  });
+
+  it("rejects a second operation whose first event follows an initial gap", async () => {
+    const dir = tempDir();
+    expect(
+      await runApp(
+        [
+          "node",
+          "urbuddy",
+          "replay",
+          join(root, "fixtures/replay/basic.ndjson"),
+          "--persist",
+          "--allow-native",
+          "--operation-id",
+          "op-first",
+        ],
+        { URBUDDY_DATA_ROOT: dir },
+      ),
+    ).toBe(EXIT_CODES.success);
+    const gapPath = join(dir, "gapstart.ndjson");
+    writeFileSync(
+      gapPath,
+      JSON.stringify({
+        sessionId: "s-1",
+        streamId: "st-1",
+        seq: 5,
+        kind: "partial",
+        utteranceId: "u9",
+        revision: 0,
+        text: "late",
+      }) + "\n",
+      "utf8",
+    );
+    const code = await runApp(
+      [
+        "node",
+        "urbuddy",
+        "replay",
+        gapPath,
+        "--persist",
+        "--allow-native",
+        "--operation-id",
+        "op-second",
+      ],
+      { URBUDDY_DATA_ROOT: dir },
+    );
+    expect(code).not.toBe(EXIT_CODES.success);
+    const store = openStore(dir);
+    expect(listGaps(store, "s-1")).toEqual([]);
+    store.close();
+  });
+
+  it("terminally fails an abandoned claim on its final attempt", () => {
+    const store = openStore(tempDir());
+    recordEvent(store, ev());
+    completeOperation(store, {
+      opId: "op-1",
+      sessionId: "s-1",
+      streamId: "st-1",
+      summary,
+      expectedCount: 1,
+      expectedMaxSeq: 0,
+    });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const claim = claimJobs(store, { limit: 1, leaseMs: 10, nowMs: attempt * 20 });
+      expect(claim.isOk() && claim.value).toHaveLength(1);
+    }
+    const after = claimJobs(store, { limit: 1, leaseMs: 10, nowMs: 1000 });
+    expect(after.isOk() && after.value).toHaveLength(0);
+    expect(countJobs(store, "failed")).toBe(1);
+    store.close();
+  });
+
   it("rejects a second operation owning the same stream", () => {
     const store = openStore(tempDir());
     recordEvent(store, ev());

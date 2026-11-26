@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { systemClock, type Clock } from "@kernel/clock";
@@ -144,26 +143,9 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
               };
               return ok(persistence);
             },
-            fingerprintFixture: async (
-              fixture: string,
-              signal: AbortSignal,
-            ): Promise<Result<string, AppError>> => {
-              const hash = createHash("sha256");
-              const stream = createReadStream(fixture);
-              const onAbort = (): void => {
-                stream.destroy();
-              };
-              signal.addEventListener("abort", onAbort, { once: true });
-              try {
-                for await (const chunk of stream) {
-                  hash.update(chunk as Buffer);
-                }
-                return ok(hash.digest("hex"));
-              } catch (thrown: unknown) {
-                return err(toAppError(thrown, "cannot read replay fixture"));
-              } finally {
-                signal.removeEventListener("abort", onAbort);
-              }
+            openFingerprintedSource: async (fixture, sourceSignal) => {
+              const { openFingerprintedFixture } = await import("@platform/fixture");
+              return openFingerprintedFixture(fixture, { signal: sourceSignal });
             },
             newOperationId: () => randomUUID(),
           }

@@ -26,4 +26,5 @@ jobs:
       - run: node dist/bootstrap/main.js --ink-smoke
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --json
+      - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --persist --allow-native --operation-id ci-smoke --data-root /tmp/urbuddy-ci-data
       - run: pnpm audit --audit-level high
