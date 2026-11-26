@@ -5,9 +5,6 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve(root, "assets", "brand");
 
-const PKG = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const APP_VERSION = PKG.version;
-
 function loadRoadmapSteps() {
   const text = readFileSync(resolve(root, "docs/roadmap.md"), "utf8");
   const steps = [];
@@ -155,7 +152,7 @@ assets["hero.svg"] = () => {
       `<g class="rise" style="animation-delay:.1s" transform="rotate(1.5 400 220)"><polygon points="80,100 668,88 656,296 668,304 608,388 72,376" fill="${INK}"/></g>`,
       `<g class="rise" style="animation-delay:.18s"><polygon points="48,84 640,72 628,280 660,288 600,372 40,360" fill="${PAPER}"/></g>`,
       burst({ cx: 800, cy: 76, rays: 14, r0: 26, r1: 66, color: ORANGE, width: 6 }),
-      `<g class="rise" style="animation-delay:.05s">${wordmark({ x: 64, y: 34, scale: 0.38, top: INK, bottom: ORANGE })}</g>`,
+      `<g class="rise" style="animation-delay:.05s"><polygon points="52,22 256,18 250,74 58,78" fill="${PAPER}"/><polygon points="52,22 256,18 250,74 58,78" fill="none" stroke="${INK}" stroke-width="5"/>${wordmark({ x: 66, y: 30, scale: 0.38, top: INK, bottom: ORANGE })}</g>`,
       headline("BREAK THE", 168, INK, 0.22),
       headline("LANGUAGE", 240, INK, 0.3),
       headline("BARRIER.", 312, INK, 0.38),
@@ -242,7 +239,7 @@ assets["capabilities.svg"] = () =>
     width: 900,
     height: 380,
     label:
-      "Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; foundation shipped in 0.1.0.",
+      "Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; the fixed strip names the implemented scope.",
     title: "Urbuddy capabilities",
     css: BASE_CSS,
     defs: halftone("cap-dots", INK),
@@ -289,7 +286,7 @@ assets["capabilities.svg"] = () =>
         statusFill: PAPER,
         statusText: INK,
       }),
-      `<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="${ACID}"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="${INK}" stroke-width="5"/><text x="56" y="331" font-family="${MONO}" font-size="17" font-weight="700" fill="${INK}" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED IN ${APP_VERSION}: typed errors, config, lifecycle, CLI, smoke</text></g>`,
+      `<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="${ACID}"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="${INK}" stroke-width="5"/><text x="56" y="331" font-family="${MONO}" font-size="17" font-weight="700" fill="${INK}" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED: typed errors, config, lifecycle, CLI, smoke</text></g>`,
     ].join("\n"),
   });
 
@@ -351,21 +348,24 @@ assets["architecture.svg"] = () => {
 assets["roadmap.svg"] = () => {
   const steps = loadRoadmapSteps();
   const stateFill = { DONE: ACID, NEXT: ORANGE };
+  const label =
+    "Roadmap. " +
+    steps.map((s) => `${s.name.toLowerCase()}: ${s.state.toLowerCase()}`).join(", ") +
+    ".";
   const chips = steps
     .map(({ name, state }, i) => {
       const fill = stateFill[state] ?? PAPER;
-      const label = i === 0 ? `${state} ${APP_VERSION}` : state;
       const col = i % 3;
       const row = Math.floor(i / 3);
       const x = 36 + col * 280;
       const y = 30 + row * 84;
-      return `<g class="rise" style="animation-delay:${(i * 0.08).toFixed(2)}s"><rect x="${x}" y="${y}" width="256" height="64" fill="${fill}"/><rect x="${x}" y="${y}" width="256" height="64" fill="none" stroke="${INK}" stroke-width="5"/><text x="${x + 14}" y="${y + 28}" font-family="${DISPLAY}" font-size="17" fill="${INK}" textLength="228" lengthAdjust="spacingAndGlyphs">${esc(name)}</text><text x="${x + 14}" y="${y + 50}" font-family="${MONO}" font-size="14" font-weight="700" fill="${INK}">${esc(label)}</text></g>`;
+      return `<g class="rise" style="animation-delay:${(i * 0.08).toFixed(2)}s"><rect x="${x}" y="${y}" width="256" height="64" fill="${fill}"/><rect x="${x}" y="${y}" width="256" height="64" fill="none" stroke="${INK}" stroke-width="5"/><text x="${x + 14}" y="${y + 28}" font-family="${DISPLAY}" font-size="17" fill="${INK}" textLength="228" lengthAdjust="spacingAndGlyphs">${esc(name)}</text><text x="${x + 14}" y="${y + 50}" font-family="${MONO}" font-size="14" font-weight="700" fill="${INK}">${esc(state)}</text></g>`;
     })
     .join("\n");
   return doc({
     width: 900,
     height: 300,
-    label: "Roadmap. Foundation done, Core Runtime next, seven milestones planned.",
+    label,
     title: "Urbuddy roadmap",
     css: BASE_CSS,
     defs: "",

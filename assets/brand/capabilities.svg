@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" role="img" aria-label="Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; foundation shipped in 0.1.0.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" role="img" aria-label="Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; the fixed strip names the implemented scope.">
 <title>Urbuddy capabilities</title>
 <style>
 .rise{transform-box:fill-box;transform-origin:center;animation:rise .5s cubic-bezier(.2,1.4,.4,1) both}
@@ -49,5 +49,5 @@
 
 <g transform="rotate(-4 798 183)"><rect x="742" y="170" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="190" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
 </g></g>
-<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED IN 0.1.0: typed errors, config, lifecycle, CLI, smoke</text></g>
+<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED: typed errors, config, lifecycle, CLI, smoke</text></g>
 </svg>
