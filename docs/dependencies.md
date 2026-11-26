@@ -18,7 +18,7 @@ OpenTelemetry, drizzle, xstate, …) are compat-checked but NOT installed.
 | react      | 19.3.1  | MIT     | >=0.10          | Ink peer                                               | presentation        |
 | strip-ansi | 7.2.0   | MIT     | >=12            | `src/platform/output.ts` sanitize                      | platform            |
 | ts-pattern | 5.9.2   | MIT     | none            | exhaustive command + exit-code dispatch                | kernel/presentation |
-| zod        | 4.6.7   | MIT     | none            | config, commands, resources, log-level schemas         | kernel/modules      |
+| zod        | 4.6.7   | MIT     | none            | config, resources, log-level schemas                   | kernel/modules      |
 
 ## Development
 
