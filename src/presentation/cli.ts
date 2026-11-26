@@ -9,6 +9,8 @@ import { Command, CommanderError } from "commander";
 import { match } from "ts-pattern";
 
 import { runInkSmoke } from "./ink-smoke.js";
+import type { CliOutput } from "./output.js";
+import { runReplaySession } from "./replay.js";
 
 export interface CliDeps {
   readonly version: string;
@@ -18,11 +20,6 @@ export interface CliDeps {
   readonly correlationId: CorrelationId;
   readonly nowIso: string;
   readonly signal: AbortSignal;
-}
-
-export interface CliOutput {
-  out(line: string): void;
-  errLine(line: string): void;
 }
 
 export interface DoctorCheck {
@@ -209,6 +206,23 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
       }
       if (!report.ok) {
         throw new Error("doctor checks failing");
+      }
+    });
+
+  program
+    .command("replay")
+    .description(commandHelp("replay"))
+    .argument("<fixture>", "path to a synthetic NDJSON transcript fixture")
+    .option("--json", "emit one stable JSON object per line", false)
+    .action(async (fixture: string, options: { json: boolean }) => {
+      const result = await runReplaySession({
+        fixture,
+        json: options.json,
+        signal: deps.signal,
+        output,
+      });
+      if (result.isErr()) {
+        throw result.error;
       }
     });
 
