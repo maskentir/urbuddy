@@ -21,10 +21,10 @@ import {
   runCli,
   runDoctorChecks,
   type CliDeps,
-  type CliOutput,
   type DoctorCheck,
 } from "@presentation/cli";
 import { runInkSmoke, startupMessageText } from "@presentation/ink-smoke";
+import type { CliOutput } from "@presentation/output";
 import { describe, expect, it } from "vitest";
 
 function testDeps(): CliDeps {

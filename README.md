@@ -42,8 +42,10 @@ Four planned capabilities, one per product workflow
 ([docs/product.md](./docs/product.md)): live bilingual captions,
 contextual translation, missed-context catch-up, and a personal
 vocabulary that grows from real meetings. What ships today is the
-foundation: typed errors, validated configuration, resource
-lifecycle, CLI, and smoke paths.
+foundation — typed errors, validated configuration, resource
+lifecycle, CLI, and smoke paths — plus the first Core Runtime slice:
+deterministic offline session replay through the `replay` command.
+Core Runtime stays in progress until durable persistence lands.
 
 ## Under the hood
 
@@ -78,6 +80,7 @@ pnpm check
 pnpm smoke
 pnpm doctor
 pnpm ink-smoke
+pnpm exec tsx src/bootstrap/main.ts replay fixtures/replay/basic.ndjson
 ```
 
 ### Scripts
@@ -105,6 +108,7 @@ pnpm ink-smoke
 | `src/kernel`           | Errors, identity, lifecycle, and shared primitives | [kernel](./src/kernel)             |
 | `src/modules/config`   | Validated session configuration                    | [config](./src/modules/config)     |
 | `src/modules/security` | Default-deny security policy                       | [security](./src/modules/security) |
+| `src/modules/session`  | Session runtime: ordering, revisions, gaps         | [session](./src/modules/session)   |
 | `src/platform`         | Infrastructure, logging, paths, and output         | [platform](./src/platform)         |
 | `src/presentation`     | Commander CLI and Ink terminal                     | [presentation](./src/presentation) |
 | `tests/`               | Behavioral verification                            | [tests](./tests)                   |

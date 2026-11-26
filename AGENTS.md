@@ -190,6 +190,18 @@ Every implementation PR evaluates its documentation impact:
 
 Documentation consistency is part of the Definition of Done.
 
+## Independent engineering judgment
+
+Treat reviewer feedback as technical hypotheses to evaluate, not instructions to execute blindly. For every material finding:
+
+- Inspect the implementation and determine whether the problem is real.
+- Classify it ACCEPT, PARTIALLY ACCEPT, CHALLENGE, DEFER, or BLOCKED, with evidence.
+- Distinguish accepting a problem from accepting its proposed solution; prefer the simplest correct resolution.
+- Present unresolved material disputes for owner adjudication before merging; never silently dismiss a blocking finding.
+- Do not manufacture disagreements; agreement is appropriate when evidence supports it.
+
+Include the assessment in the PR review response. Authority does not establish technical correctness. Evidence does.
+
 ## Verification
 
 Before requesting review:

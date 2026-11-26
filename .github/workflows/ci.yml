@@ -24,4 +24,6 @@ jobs:
       - run: pnpm build
       - run: node dist/bootstrap/main.js doctor
       - run: node dist/bootstrap/main.js --ink-smoke
+      - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson
+      - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --json
       - run: pnpm audit --audit-level high

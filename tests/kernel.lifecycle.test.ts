@@ -410,7 +410,7 @@ describe("exit codes", () => {
 
 describe("commands", () => {
   it("catalog holds doctor and version with help text", () => {
-    expect([...COMMAND_NAMES]).toEqual(["doctor", "version"]);
+    expect([...COMMAND_NAMES]).toEqual(["doctor", "version", "replay"]);
     for (const name of COMMAND_NAMES) {
       expect(commandHelp(name).length).toBeGreaterThan(0);
     }
