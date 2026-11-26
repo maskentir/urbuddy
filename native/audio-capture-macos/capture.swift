@@ -131,6 +131,7 @@ final class Handoff: @unchecked Sendable {
   private var droppedChunks: UInt64 = 0
   private var sourceFrames: UInt64 = 0
   private var layout: (buffers: Int, sizes: [Int])?
+  private var fatalStage: String?
 
   init(slotCount: Int, slotSamples: Int, channels: Int) {
     slots = Array(repeating: Array(repeating: 0, count: slotSamples), count: slotCount)
@@ -218,6 +219,31 @@ final class Handoff: @unchecked Sendable {
     defer { os_unfair_lock_unlock(&lock) }
     return (capturedChunks, droppedChunks, sourceFrames)
   }
+
+  func noteDropped(sampleCount: Int) {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    droppedChunks += 1
+    if sampleCount > 0 && sampleCount % channels == 0 {
+      sourceFrames += UInt64(sampleCount / channels)
+    }
+  }
+
+  func noteFatal(_ stage: String) {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    if fatalStage == nil {
+      fatalStage = stage
+    }
+  }
+
+  func takeFatal() -> String? {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    let out = fatalStage
+    fatalStage = nil
+    return out
+  }
 }
 
 var terminationRequested = false
@@ -253,6 +279,7 @@ final class RealCapture {
   var tapID = AudioObjectID(0)
   var aggID = AudioObjectID(0)
   var procID: AudioDeviceIOProcID?
+  var procStopped = false
   var handoff: Handoff?
   var channels: UInt32 = 0
 
@@ -292,7 +319,8 @@ final class RealCapture {
     }
     let isFloat = (tapFormat.mFormatFlags & kAudioFormatFlagIsFloat) != 0
     let interleaved = (tapFormat.mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0
-    guard isFloat, interleaved, tapFormat.mBitsPerChannel == 32 else {
+    let channelCount = tapFormat.mChannelsPerFrame
+    guard isFloat, interleaved, tapFormat.mBitsPerChannel == 32, channelCount >= 1, channelCount <= 8 else {
       emitState("error", attempt: 0, extra: [("stage", "\"unsupported-format\"")])
       destroyTap()
       return false
@@ -349,38 +377,35 @@ final class RealCapture {
     let createStatus = AudioDeviceCreateIOProcIDWithBlock(&created, aggID, nil) {
       _, inInputData, _, _, _ in
       let bufferCount = Int(inInputData.pointee.mNumberBuffers)
-      guard bufferCount >= 1 else { return }
-      guard let baseOffset = MemoryLayout<AudioBufferList>.offset(of: \.mBuffers) else { return }
-      let first = (UnsafeRawPointer(inInputData) + baseOffset).assumingMemoryBound(to: AudioBuffer.self)
-      var totalBytes = 0
-      var valid = true
-      for i in 0..<bufferCount {
-        let buf = first[i]
-        guard let data = buf.mData else { continue }
-        if Int(bitPattern: data) % 4 != 0 || buf.mDataByteSize % 4 != 0 {
-          valid = false
-          break
-        }
-        totalBytes += Int(buf.mDataByteSize)
+      guard bufferCount == 1 else {
+        handoff.noteFatal("unsupported-buffer-layout")
+        return
       }
-      if !valid || totalBytes == 0 { return }
+      guard let baseOffset = MemoryLayout<AudioBufferList>.offset(of: \.mBuffers) else {
+        handoff.noteFatal("invalid-buffer")
+        return
+      }
+      let buf = (UnsafeRawPointer(inInputData) + baseOffset).assumingMemoryBound(to: AudioBuffer.self).pointee
+      let byteCount = Int(buf.mDataByteSize)
+      if byteCount == 0 { return }
+      guard byteCount % (4 * Int(self.channels)) == 0 else {
+        handoff.noteFatal("invalid-buffer")
+        return
+      }
+      guard let data = buf.mData else {
+        handoff.noteDropped(sampleCount: byteCount / 4)
+        return
+      }
+      if Int(bitPattern: data) % 4 != 0 {
+        handoff.noteFatal("invalid-buffer")
+        return
+      }
       if !handoff.hasLayout() {
-        var sizes = [Int]()
-        for i in 0..<bufferCount {
-          sizes.append(Int(first[i].mDataByteSize))
-        }
-        handoff.noteLayout(buffers: bufferCount, sizes: sizes)
+        handoff.noteLayout(buffers: bufferCount, sizes: [byteCount])
       }
-      handoff.push(sampleCount: totalBytes / 4) { dest in
-        var offset = 0
-        for i in 0..<bufferCount {
-          let buf = first[i]
-          guard let data = buf.mData else { continue }
-          let floats = data.assumingMemoryBound(to: Float32.self)
-          let count = Int(buf.mDataByteSize) / 4
-          dest.advanced(by: offset).update(from: floats, count: count)
-          offset += count
-        }
+      handoff.push(sampleCount: byteCount / 4) { dest in
+        let floats = data.assumingMemoryBound(to: Float32.self)
+        dest.update(from: floats, count: byteCount / 4)
       }
     }
     guard createStatus == noErr, let created else {
@@ -414,9 +439,10 @@ final class RealCapture {
   func teardown() -> Bool {
     var ok = true
     if let procID, aggID != 0 {
-      if AudioDeviceStop(aggID, procID) != noErr { ok = false }
+      if !procStopped, AudioDeviceStop(aggID, procID) != noErr { ok = false }
       if AudioDeviceDestroyIOProcID(aggID, procID) != noErr { ok = false }
       self.procID = nil
+      procStopped = false
     }
     if aggID != 0 {
       if AudioHardwareDestroyAggregateDevice(aggID) != noErr { ok = false }
@@ -427,9 +453,11 @@ final class RealCapture {
   }
 
   func stopEngine() -> Bool {
-    guard let procID, aggID != 0 else { return false }
+    guard let procID, aggID != 0 else { return procStopped }
     let status = AudioDeviceStop(aggID, procID)
-    self.procID = nil
+    if status == noErr {
+      procStopped = true
+    }
     return status == noErr
   }
 
@@ -479,6 +507,15 @@ final class RealCapture {
       if terminationRequested {
         reason = endCancelled
         break
+      }
+      if let fatal = handoff.takeFatal() {
+        if fatal == "invalid-buffer" {
+          emitState("error", attempt: 1, extra: [("stage", "\"invalid-buffer\"")])
+        } else {
+          emitState("error", attempt: 1, extra: [("stage", "\"unsupported-buffer-layout\"")])
+        }
+        teardown()
+        return 3
       }
       if let deadline, Date() >= deadline { break }
       if !layoutReported, let layout = handoff.takeLayout() {
