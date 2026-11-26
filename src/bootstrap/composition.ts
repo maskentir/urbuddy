@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -14,7 +17,7 @@ import {
   type ConfigFlags,
   type ImmutableSessionConfig,
 } from "@modules/config/loader";
-import { effectivePolicy, type SecurityPolicy } from "@modules/security/policy";
+import { effectivePolicy, isPermitted, type SecurityPolicy } from "@modules/security/policy";
 import { SessionRuntime } from "@modules/session/runtime";
 import { openLineSource } from "@platform/fixture";
 import { createLogger, type Logger } from "@platform/logging";
@@ -70,6 +73,7 @@ export function createAppContainer(input: CreateAppInput = {}): AppContainer | {
     {
       allowNetworkEgress: config.allowNetworkEgress,
       allowChildProcesses: config.allowChildProcesses,
+      allowNativeModules: config.allowNativeModules,
     },
     config.profile,
     paths.data,
@@ -110,6 +114,15 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     replayPort: createReplayPort({
       runtime: new SessionRuntime(),
       openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
+      ...(isPermitted(app.policy, "load-native-module")
+        ? {
+            openStore: async () => {
+              const { EvidenceStore } = await import("@platform/persistence/store");
+              return EvidenceStore.open(join(app.paths.data, "evidence.sqlite"));
+            },
+            newOperationId: () => randomUUID(),
+          }
+        : {}),
     }),
   };
 }

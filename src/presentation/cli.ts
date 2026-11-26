@@ -129,6 +129,7 @@ interface GlobalOptionValues {
   readonly dataRoot?: string;
   readonly allowEgress?: boolean;
   readonly allowChild?: boolean;
+  readonly allowNative?: boolean;
 }
 
 function addGlobalOptions(program: Command): Command {
@@ -140,7 +141,8 @@ function addGlobalOptions(program: Command): Command {
     .option("--log-level <level>", "log level (trace|debug|info|warn|error|fatal)")
     .option("--data-root <dir>", "override the session data directory")
     .option("--allow-egress", "grant network egress for this session")
-    .option("--allow-child", "grant child-process spawning for this session");
+    .option("--allow-child", "grant child-process spawning for this session")
+    .option("--allow-native", "grant native module loading for this session");
 }
 
 function toConfigFlags(values: GlobalOptionValues): ConfigFlags {
@@ -150,6 +152,7 @@ function toConfigFlags(values: GlobalOptionValues): ConfigFlags {
     ...(values.dataRoot === undefined ? {} : { dataRoot: values.dataRoot }),
     ...(values.allowEgress === undefined ? {} : { allowNetworkEgress: values.allowEgress }),
     ...(values.allowChild === undefined ? {} : { allowChildProcesses: values.allowChild }),
+    ...(values.allowNative === undefined ? {} : { allowNativeModules: values.allowNative }),
   };
 }
 
@@ -206,20 +209,29 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
     .description(commandHelp("replay"))
     .argument("<fixture>", "path to a synthetic NDJSON transcript fixture")
     .option("--json", "emit one stable JSON object per line", false)
-    .action(async (fixture: string, options: { json: boolean }) => {
-      if (deps.replayPort === undefined) {
-        throw new Error("replay is not wired");
-      }
-      const result = await deps.replayPort({
-        fixture,
-        json: options.json,
-        signal: deps.signal,
-        output,
-      });
-      if (result.isErr()) {
-        throw result.error;
-      }
-    });
+    .option("--persist", "persist replay evidence (requires native module authorization)", false)
+    .option("--operation-id <id>", "stable operation identity for an idempotent persistent replay")
+    .action(
+      async (
+        fixture: string,
+        options: { json: boolean; persist: boolean; operationId?: string },
+      ) => {
+        if (deps.replayPort === undefined) {
+          throw new Error("replay is not wired");
+        }
+        const result = await deps.replayPort({
+          fixture,
+          json: options.json,
+          signal: deps.signal,
+          output,
+          persist: options.persist,
+          ...(options.operationId === undefined ? {} : { operationId: options.operationId }),
+        });
+        if (result.isErr()) {
+          throw result.error;
+        }
+      },
+    );
 
   program
     .option("--ink-dwell-ms <ms>", "smoke frame duration in milliseconds", "50")
