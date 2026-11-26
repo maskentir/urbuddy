@@ -15,6 +15,8 @@ export type StreamEvent = z.infer<typeof streamEventSchema>;
 export type SessionOutput =
   | {
       readonly type: "applied";
+      readonly sessionId: string;
+      readonly streamId: string;
       readonly seq: number;
       readonly utteranceId: string;
       readonly revision: number;

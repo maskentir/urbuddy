@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -14,13 +17,15 @@ import {
   type ConfigFlags,
   type ImmutableSessionConfig,
 } from "@modules/config/loader";
-import { effectivePolicy, type SecurityPolicy } from "@modules/security/policy";
-import { SessionRuntime } from "@modules/session/runtime";
+import { effectivePolicy, isPermitted, type SecurityPolicy } from "@modules/security/policy";
+import type { EvidencePersistence } from "@modules/session/persistence";
+import { runReplay } from "@modules/session/replay";
 import { openLineSource } from "@platform/fixture";
 import { createLogger, type Logger } from "@platform/logging";
 import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
+import { err, ok, type Result } from "neverthrow";
 
 import { URBUDDY_VERSION } from "./version.js";
 
@@ -70,6 +75,7 @@ export function createAppContainer(input: CreateAppInput = {}): AppContainer | {
     {
       allowNetworkEgress: config.allowNetworkEgress,
       allowChildProcesses: config.allowChildProcesses,
+      allowNativeModules: config.allowNativeModules,
     },
     config.profile,
     paths.data,
@@ -108,8 +114,42 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     nowIso: app.clock.isoNow(),
     signal,
     replayPort: createReplayPort({
-      runtime: new SessionRuntime(),
+      runOperation: runReplay,
       openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
+      ...(isPermitted(app.policy, "load-native-module")
+        ? {
+            openPersistence: async (): Promise<Result<EvidencePersistence, AppError>> => {
+              const { openEvidenceDatabase } = await import("@platform/persistence/database");
+              const evidence = await import("@platform/persistence/evidence");
+              const opened = openEvidenceDatabase(join(app.paths.data, "evidence.sqlite"));
+              if (opened.isErr()) {
+                return err(opened.error);
+              }
+              const handle = opened.value;
+              const persistence: EvidencePersistence = {
+                admit: async (opId, sourceFingerprint) =>
+                  evidence.admitOperation(handle, opId, sourceFingerprint),
+                record: async (event, opId) => {
+                  const result = evidence.recordEvent(handle, { ...event, opId });
+                  return result.isOk() ? ok(undefined) : err(result.error);
+                },
+                recordGap: async (gap) => evidence.recordGap(handle, gap),
+                verify: async (event) => evidence.verifyEvent(handle, event),
+                complete: async (completion) => {
+                  const result = evidence.completeOperation(handle, completion);
+                  return result.isOk() ? ok(undefined) : err(result.error);
+                },
+                close: async () => handle.close(),
+              };
+              return ok(persistence);
+            },
+            openFingerprintedSource: async (fixture, sourceSignal) => {
+              const { openFingerprintedFixture } = await import("@platform/fixture");
+              return openFingerprintedFixture(fixture, { signal: sourceSignal });
+            },
+            newOperationId: () => randomUUID(),
+          }
+        : {}),
     }),
   };
 }

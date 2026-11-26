@@ -146,4 +146,11 @@ Available profiles: `development`, `simulation`, `evaluation`,
 code 3). Validation rejects bad configuration; runtime enforcement
 happens at the operation boundary, not in the parser.
 
+Persistent replay is opt-in per run: `replay <fixture> --persist`
+additionally requires the native-module grant (`--allow-native`,
+development/personal profiles only) and writes `evidence.sqlite`
+(WAL, synchronous FULL) under the data root. Add
+`--operation-id <id>` to make a persistent replay an idempotent retry
+of the same logical operation.
+
 <p align="center"><img src="assets/brand/footer.svg" width="100%" alt="Closing. Hear, understand, respond, evolve." /></p>

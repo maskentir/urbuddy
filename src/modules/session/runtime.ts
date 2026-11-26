@@ -288,6 +288,8 @@ export class SessionRuntime {
       counts.applied += 1;
       return ok({
         type: "applied",
+        sessionId: event.sessionId,
+        streamId: event.streamId,
         seq: event.seq,
         utteranceId: event.utteranceId,
         revision: event.revision,
@@ -318,6 +320,8 @@ export class SessionRuntime {
         counts.applied += 1;
         return ok({
           type: "applied",
+          sessionId: event.sessionId,
+          streamId: event.streamId,
           seq: event.seq,
           utteranceId: event.utteranceId,
           revision: event.revision,
@@ -355,6 +359,8 @@ export class SessionRuntime {
     counts.applied += 1;
     return ok({
       type: "applied",
+      sessionId: event.sessionId,
+      streamId: event.streamId,
       seq: event.seq,
       utteranceId: event.utteranceId,
       revision: event.revision,

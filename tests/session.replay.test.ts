@@ -10,6 +10,7 @@ import { appError, type AppError } from "@kernel/errors";
 import { EXIT_CODES } from "@kernel/exit-codes";
 import { createDeterministicIdGenerator } from "@kernel/ids";
 import { type ReplaySummary, type SessionOutput } from "@modules/session/events";
+import { runReplay } from "@modules/session/replay";
 import { SessionRuntime, type ReplaySource } from "@modules/session/runtime";
 import { openLineSource } from "@platform/fixture";
 import { exitCodeForError, runCli, type CliDeps } from "@presentation/cli";
@@ -351,7 +352,7 @@ function testDeps(signal?: AbortSignal): CliDeps {
     nowIso: created.clock.isoNow(),
     signal: signal ?? new AbortController().signal,
     replayPort: createReplayPort({
-      runtime: new SessionRuntime(),
+      runOperation: runReplay,
       openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
     }),
   };

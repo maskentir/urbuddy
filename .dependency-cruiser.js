@@ -31,9 +31,23 @@ export default {
     {
       name: "platform-boundary",
       severity: "error",
-      comment: "Platform wraps the outside world; it never imports domain or UI layers.",
+      comment:
+        "Platform wraps the outside world; it never imports domain or UI layers, except type-only application ports it implements.",
       from: { path: "^src/platform" },
-      to: { path: "^(src/modules|src/presentation|src/bootstrap)" },
+      to: {
+        path: "^(src/modules|src/presentation|src/bootstrap)",
+        pathNot: "^src/modules/session/persistence",
+      },
+    },
+    {
+      name: "platform-port-type-only",
+      severity: "error",
+      comment: "Platform implementations may reference application ports only as types.",
+      from: { path: "^src/platform" },
+      to: {
+        path: "^src/modules/session/persistence",
+        dependencyTypesNot: ["type-only"],
+      },
     },
     {
       name: "modules-boundary",
