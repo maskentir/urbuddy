@@ -39,9 +39,9 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm native:build
       - run: pnpm check
       - run: pnpm build
-      - run: pnpm native:build
       - run: node dist/bootstrap/main.js doctor
       - run: node dist/bootstrap/main.js capture --synthetic-frames 200 --duration 30 --allow-child
       - run: node dist/bootstrap/main.js capture --synthetic-frames 5 --duration 10 --allow-child --json
