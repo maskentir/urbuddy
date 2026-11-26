@@ -325,6 +325,10 @@ describe("persist integration", () => {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
+    let received = "";
+    child.stdout.on("data", (chunk: unknown) => {
+      received += String(chunk);
+    });
     const dbPath = join(dir, "evidence.sqlite");
     let committed = 0;
     for (let attempt = 0; attempt < 400 && child.exitCode === null; attempt += 1) {
@@ -350,8 +354,23 @@ describe("persist integration", () => {
     const afterKill = openStore(dir);
     const partial = countEvidence(afterKill);
     expect(partial).toBeGreaterThan(0);
-    const durableSeqs = listEvidence(afterKill, "s-crash").map((row) => row.seq);
+    const durableRows = listEvidence(afterKill, "s-crash");
+    const durableSeqs = durableRows.map((row) => row.seq);
     expect(durableSeqs).toEqual(Array.from({ length: partial }, (_, i) => i));
+    const bySeq = new Map(durableRows.map((row) => [row.seq, row]));
+    const acknowledged = received
+      .split("\n")
+      .map((line) => /^\[seq=(\d+)\] (u\d+)#r0 PARTIAL: (.+)$/.exec(line))
+      .filter((found) => found !== null);
+    expect(acknowledged.length).toBeGreaterThan(0);
+    expect(acknowledged.length).toBeLessThan(4000);
+    for (const found of acknowledged) {
+      const seq = Number(found[1]);
+      const row = bySeq.get(seq);
+      expect(row, `acknowledged seq ${seq} must be durable`).toBeDefined();
+      expect(row?.utteranceId).toBe(found[2]);
+      expect(row?.text).toBe(found[3]);
+    }
     afterKill.close();
     const retry = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
@@ -657,4 +676,65 @@ describe("admission and migration regressions", () => {
     raw.close();
     store.close();
   });
+});
+
+describe("commit-before-acknowledgement barrier", () => {
+  it("recovers the committed outcome after death before terminal acknowledgement", async () => {
+    const dir = tempDir();
+    const marker = join(dir, "committed.marker");
+    const harness = resolve(root, "tests", "support", "commit-barrier.mts");
+    const args = [
+      tsxCli,
+      harness,
+      join(root, "fixtures/replay/basic.ndjson"),
+      dir,
+      "op-ack",
+      marker,
+    ];
+    const child = spawn(process.execPath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let seen = "";
+    child.stdout.on("data", (chunk: unknown) => {
+      seen += String(chunk);
+    });
+    for (let attempt = 0; attempt < 400 && !existsSync(marker); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(marker)).toBe(true);
+    expect(seen).not.toContain("replay complete");
+    const probe = new Database(join(dir, "evidence.sqlite"), { readonly: true });
+    const status = probe.prepare("SELECT status FROM operations WHERE op_id = 'op-ack'").get() as {
+      status: string;
+    };
+    expect(status.status).toBe("completed");
+    probe.close();
+    if (child.pid !== undefined) {
+      process.kill(-child.pid, "SIGKILL");
+    }
+    await new Promise((resolve) => child.once("exit", resolve));
+    const before = openStore(dir);
+    const evidenceBefore = countEvidence(before);
+    const jobsBefore = countJobs(before);
+    before.close();
+    const code = await runApp(
+      [
+        "node",
+        "urbuddy",
+        "replay",
+        join(root, "fixtures/replay/basic.ndjson"),
+        "--persist",
+        "--allow-native",
+        "--operation-id",
+        "op-ack",
+      ],
+      { URBUDDY_DATA_ROOT: dir },
+    );
+    expect(code).toBe(EXIT_CODES.success);
+    const after = openStore(dir);
+    expect(countEvidence(after)).toBe(evidenceBefore);
+    expect(countJobs(after)).toBe(jobsBefore);
+    after.close();
+  }, 60000);
 });
