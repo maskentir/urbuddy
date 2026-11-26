@@ -67,6 +67,16 @@ function countingSource(count: number): ReplaySource & { pulls: () => number } {
 }
 
 describe("controlled backpressure", () => {
+  it("surfaces asynchronous failure even when write returns true", async () => {
+    const failing = new Writable({
+      highWaterMark: 1_048_576,
+      write: (_chunk, _enc, callback) => {
+        setTimeout(() => callback(new Error("async failure")), 10);
+      },
+    });
+    const output = createStreamOutput(failing, failing);
+    await expect(output.out("hello")).rejects.toThrow("async failure");
+  });
   it("stops pulling while the writable is blocked", async () => {
     const gated = new GatedWritable();
     const output = createStreamOutput(gated, gated);

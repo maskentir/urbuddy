@@ -1,5 +1,6 @@
 import { once } from "node:events";
-import { open, stat, type FileHandle } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 
 import { appError, type AppError } from "@kernel/errors";
 import { err, ok, type Result } from "neverthrow";
@@ -106,11 +107,7 @@ export async function openLineSource(
   const maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
   let handle: FileHandle;
   try {
-    const before = await stat(path);
-    if (!before.isFile()) {
-      return err(fixtureFailure("replay fixture must be a regular file"));
-    }
-    handle = await open(path, "r");
+    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   } catch {
     return err(fixtureFailure("cannot read replay fixture"));
   }

@@ -586,6 +586,7 @@ describe("review regressions", () => {
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {
       expect(outcome.error.message).toBe("disk gone");
+      expect(outcome.error.details).toEqual({ cleanup: "INTERNAL" });
     }
   });
 
@@ -603,6 +604,31 @@ describe("review regressions", () => {
       expect(outcome.error.message).toBe("replay cleanup failed");
       expect(outcome.error.message).not.toContain("s3cr3t");
     }
+  });
+
+  it("does not complete when cancellation lands during disposal", async () => {
+    const controller = new AbortController();
+    const inner = sourceOf([event({ seq: 0 })]);
+    const source: ReplaySource = {
+      events: inner.events,
+      dispose: async (): Promise<void> => {
+        controller.abort();
+      },
+    };
+    const outputs: SessionOutput[] = [];
+    const runtime = new SessionRuntime();
+    const outcome = await runtime.run(
+      source,
+      (output) => {
+        outputs.push(output);
+      },
+      { signal: controller.signal },
+    );
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("CANCELLED");
+    }
+    expect(outputs.some((o) => o.type === "completed")).toBe(false);
   });
 
   it("does not complete when cancellation lands at the end boundary", async () => {

@@ -68,6 +68,14 @@ function cancelled(): AppError {
   return appError("CANCELLED", "replay cancelled");
 }
 
+function withCleanupEvidence(primary: AppError, thrown: unknown): AppError {
+  const cleanup = toAppError(thrown, "replay cleanup failed");
+  return appError(primary.code, primary.message, {
+    ...(primary.correlationId === undefined ? {} : { correlationId: primary.correlationId }),
+    details: { ...primary.details, cleanup: cleanup.code },
+  });
+}
+
 export class SessionRuntime {
   async run(
     source: ReplaySource,
@@ -102,9 +110,12 @@ export class SessionRuntime {
       if (outcome.isOk()) {
         return err(toAppError(thrown, "replay cleanup failed"));
       }
-      return outcome;
+      return err(withCleanupEvidence(outcome.error, thrown));
     }
     if (outcome.isOk()) {
+      if (options.signal !== undefined && options.signal.aborted) {
+        return err(cancelled());
+      }
       try {
         await sink({ type: "completed", summary: outcome.value });
       } catch (thrown: unknown) {
@@ -139,6 +150,7 @@ export class SessionRuntime {
         if (outcome.isOk()) {
           return err(toAppError(thrown, "replay cleanup failed"));
         }
+        return err(withCleanupEvidence(outcome.error, thrown));
       }
     }
     return outcome;
