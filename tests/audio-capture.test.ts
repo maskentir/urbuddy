@@ -12,7 +12,7 @@ import {
   spawnAudioSource,
 } from "@adapters/audio/capture-source";
 import { createAppContainer, isAppContainer } from "@bootstrap/composition";
-import { fixedClock } from "@kernel/clock";
+import { fixedClock, systemClock } from "@kernel/clock";
 import { appError, type AppError } from "@kernel/errors";
 import {
   runCaptureSession,
@@ -57,6 +57,7 @@ const ignoreSigtermScript = join(here, "support", "audio-ignore-sigterm.mjs");
 const truncatedTailScript = join(here, "support", "audio-truncated-tail.mjs");
 const abruptEndScript = join(here, "support", "audio-abrupt-end.mjs");
 const endThenHangScript = join(here, "support", "audio-end-then-hang.mjs");
+const endlessIgnoreScript = join(here, "support", "audio-endless-ignore.mjs");
 const signalDeathScript = join(here, "support", "audio-signal-death.mjs");
 
 function formatItem(): SourceItem {
@@ -630,6 +631,39 @@ describe.runIf(helperAvailable)("native helper integration", () => {
     expect(outcome.value.signalPresent).toBe(true);
   });
 
+  it("terminates a runaway capture when the output consumer stalls", async () => {
+    const resolved = resolveBundledHelperPath({});
+    if (resolved.isErr()) {
+      throw new Error("helper must resolve on this machine");
+    }
+    const child = spawn(
+      resolved.value,
+      ["--chunk-frames", "2048", "--synthetic-frames", "100000"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const source = new ChildCaptureSource(child, 65_536);
+    const startedAt = Date.now();
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: systemClock(),
+      durationMs: 2000,
+      onStats: async () => {
+        await new Promise<never>(() => undefined);
+      },
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("stalled output must fail the run");
+    }
+    expect(outcome.error.code).toBe("INTERNAL");
+    expect(elapsedMs).toBeLessThan(15000);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  }, 30000);
+
   it("cancels an active capture without reporting success", async () => {
     const resolved = resolveBundledHelperPath({});
     if (resolved.isErr()) {
@@ -785,6 +819,29 @@ describe("capture shutdown and protocol integrity", () => {
     }
     expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
   }, 20000);
+
+  it("forces termination when the consumer stalls and the helper ignores SIGTERM", async () => {
+    const { child } = launchScript(endlessIgnoreScript);
+    const source = new ChildCaptureSource(child, 65_536, 10000);
+    const startedAt = Date.now();
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: systemClock(),
+      durationMs: 2000,
+      onStats: async () => {
+        await new Promise<never>(() => undefined);
+      },
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("stalled output must fail the run");
+    }
+    expect(outcome.error.code).toBe("INTERNAL");
+    expect(elapsedMs).toBeLessThan(15000);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  }, 30000);
 
   it("requires observed termination when the helper stays alive after its end", async () => {
     const { child } = launchScript(endThenHangScript);

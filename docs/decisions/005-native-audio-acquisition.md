@@ -108,6 +108,11 @@ Four distinct facts, verified independently:
 - Successful operation: all of the above. There is no qualified
   success; a failed cleanup is an error, never a warning attached
   to success.
+- Bounded downstream consumption: the runtime awaits each
+  transcript output with a 5 s bound tied to the caller's abort
+  signal, so a stalled consumer cannot wedge the session or block
+  native termination. A bounded wait that expires fails the run;
+  disposal and the SIGTERM/SIGKILL escalation still proceed.
 
 ## Resource ownership
 

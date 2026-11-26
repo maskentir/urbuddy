@@ -68,6 +68,38 @@ export interface CaptureSessionInput {
 const MIN_DURATION_MS = 1_000;
 const MAX_DURATION_MS = 300_000;
 const STATS_INTERVAL_MS = 1_000;
+const OUTPUT_TIMEOUT_MS = 5_000;
+
+async function awaitOutput<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(appError("CANCELLED", "capture cancelled"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(appError("CANCELLED", "capture cancelled"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      reject(appError("INTERNAL", "capture output did not complete within its bound"));
+    }, OUTPUT_TIMEOUT_MS);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (reason: unknown) => {
+        cleanup();
+        reject(reason);
+      },
+    );
+  });
+}
 
 function checkDuration(durationMs: number | undefined): Result<number, AppError> {
   if (durationMs === undefined) {
@@ -144,15 +176,21 @@ async function settleCapture(
       return;
     }
     lastStatsAt = now;
-    await input.onStats?.({
-      receivedFrames: audioCount,
-      receivedSamples,
-      droppedHelper: helper?.dropped ?? 0,
-      gaps: gaps.length,
-      rms: receivedSamples === 0 ? 0 : Math.sqrt(sumSq / receivedSamples),
-      peak,
-      elapsedMs: now - startedAt,
-    });
+    if (input.onStats === undefined) {
+      return;
+    }
+    await awaitOutput(
+      input.onStats({
+        receivedFrames: audioCount,
+        receivedSamples,
+        droppedHelper: helper?.dropped ?? 0,
+        gaps: gaps.length,
+        rms: receivedSamples === 0 ? 0 : Math.sqrt(sumSq / receivedSamples),
+        peak,
+        elapsedMs: now - startedAt,
+      }),
+      signal,
+    );
   };
   try {
     throwIfAborted(signal);
@@ -166,7 +204,9 @@ async function settleCapture(
           throw appError("VALIDATION_FAILED", "capture format frame breaks sequence continuity");
         }
         format = item.format;
-        await input.onFormat?.(format);
+        if (input.onFormat !== undefined) {
+          await awaitOutput(input.onFormat(format), signal);
+        }
         continue;
       }
       if (format === undefined) {
