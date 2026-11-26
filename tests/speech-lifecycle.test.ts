@@ -210,12 +210,74 @@ function fakeSource(frames = 4, sampleRate = 24_000): CaptureSource {
   return trackedSource(items);
 }
 
+function hangingSource(): CaptureSource & { stopSeen: boolean } {
+  const inner = trackedSource([formatItem()]);
+  return {
+    ...inner,
+    get stopSeen(): boolean {
+      return inner.stopSeen;
+    },
+    async *items(signal: AbortSignal): AsyncIterable<SourceItem> {
+      yield formatItem();
+      await new Promise<never>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(appError("CANCELLED", "transcription cancelled"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => reject(appError("CANCELLED", "transcription cancelled")),
+          { once: true },
+        );
+      });
+    },
+  };
+}
+
 function providerFor(url: string, extra: Record<string, unknown> = {}): SpeechProvider {
   return createMuseProvider({
     apiKey: "test-key",
     testLoopbackEndpoint: url,
     ...extra,
   }) as SpeechProvider;
+}
+
+function pacedSource(frames: number, gapMs: number): CaptureSource & { stopSeen: boolean } {
+  const items: SourceItem[] = [
+    { type: "format", seq: 0, format: { sampleRate: 24_000, channels: 1 } },
+  ];
+  for (let i = 0; i < frames; i += 1) {
+    items.push({
+      type: "audio",
+      chunk: { seq: i + 1, startSample: i * 480, samples: new Float32Array(480).fill(0.1) },
+    });
+  }
+  items.push({
+    type: "end",
+    seq: frames + 1,
+    end: {
+      captured: frames,
+      delivered: frames,
+      dropped: 0,
+      reason: "completed",
+      sourceFrames: frames * 480,
+    },
+  });
+  const inner = trackedSource(items);
+  return {
+    ...inner,
+    get stopSeen(): boolean {
+      return inner.stopSeen;
+    },
+    async *items(signal: AbortSignal): AsyncIterable<SourceItem> {
+      for await (const item of inner.items(signal)) {
+        yield item;
+        if (item.type === "audio") {
+          await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
+        }
+      }
+    },
+  };
 }
 
 describe("handshake readiness", () => {
@@ -269,7 +331,7 @@ describe("handshake readiness", () => {
     });
     const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
     const outcome = await runTranscription({
-      source: fakeSource(20),
+      source: pacedSource(20, 25),
       provider,
       signal: new AbortController().signal,
       mode: "endpointing",
@@ -424,6 +486,96 @@ describe("termination and reconnect ownership", () => {
     expect(server.connections).toBe(1);
   });
 
+  it("waits through a real backoff and a delayed handshake without early sends", async () => {
+    let ackAt = 0;
+    const binaryAt: number[] = [];
+    server = new SpeechTestServer(({ socket, index }) => {
+      if (index === 0) {
+        acknowledge(socket);
+        socket.on("message", (_data: Buffer, isBinary: boolean) => {
+          if (isBinary) {
+            socket.close(1011);
+          }
+        });
+        return;
+      }
+      socket.once("message", (data: Buffer, isBinary: boolean) => {
+        if (!isBinary && data.toString().includes("authorization")) {
+          setTimeout(() => {
+            ackAt = Date.now();
+            socket.send(JSON.stringify({ sessionId: "late-backoff" }));
+          }, 400);
+        }
+      });
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          binaryAt.push(Date.now());
+          return;
+        }
+        if (data.toString().includes("endStream")) {
+          finishedTurn(socket, "Late backoff.");
+        }
+      });
+    });
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [500] });
+    const outcome = await runTranscription({
+      source: pacedSource(20, 25),
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isOk()).toBe(true);
+    expect(server.connections).toBe(2);
+    expect(binaryAt.length).toBeGreaterThan(0);
+    expect(binaryAt.every((at) => at >= ackAt)).toBe(true);
+  });
+
+  it("cancels a sender waiting through backoff and handshake", async () => {
+    const secondEpochAudio: Buffer[] = [];
+    server = new SpeechTestServer(({ socket, index }) => {
+      if (index === 0) {
+        acknowledge(socket);
+        socket.on("message", (_data: Buffer, isBinary: boolean) => {
+          if (isBinary) {
+            socket.close(1011);
+          }
+        });
+        return;
+      }
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          secondEpochAudio.push(Buffer.from(data));
+        }
+      });
+      socket.once("message", () => {
+        setTimeout(() => socket.send(JSON.stringify({ sessionId: "never" })), 5_000);
+      });
+    });
+    const controller = new AbortController();
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [200] });
+    const outcome = runTranscription({
+      source: pacedSource(40, 20),
+      provider,
+      signal: controller.signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(server.connections).toBe(2);
+    const started = Date.now();
+    controller.abort();
+    const result = await outcome;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("CANCELLED");
+    }
+    expect(secondEpochAudio.length).toBe(0);
+  });
+
   it("cancels during reconnect backoff without opening a new connection", async () => {
     server = new SpeechTestServer(({ socket }) => {
       acknowledge(socket);
@@ -448,7 +600,7 @@ describe("termination and reconnect ownership", () => {
         }),
     });
     const outcome = runTranscription({
-      source: fakeSource(40),
+      source: pacedSource(40, 20),
       provider,
       signal: controller.signal,
       mode: "endpointing",
@@ -545,7 +697,7 @@ describe("termination and reconnect ownership", () => {
       maxReconnects: 1,
     });
     const outcome = await runTranscription({
-      source: fakeSource(40),
+      source: pacedSource(40, 20),
       provider,
       signal: new AbortController().signal,
       mode: "endpointing",
@@ -556,33 +708,36 @@ describe("termination and reconnect ownership", () => {
     expect(server.connections).toBe(2);
   });
 
-  it("fails closed when the resend buffer cannot cover unprocessed audio", async () => {
+  it("fails finalization when the connection drops after end-of-input", async () => {
     server = new SpeechTestServer(({ socket }) => {
       acknowledge(socket);
-      socket.on("message", (_data: Buffer, isBinary: boolean) => {
-        if (isBinary) {
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (!isBinary && data.toString().includes("endStream")) {
           socket.close(1011);
         }
       });
     });
-    const provider = providerFor(await server.url(), {
-      reconnectBackoffMs: [10],
-      maxReconnects: 2,
-      maxResendBytes: 100,
-    });
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const events: TranscriptEvent[] = [];
     const outcome = await runTranscription({
-      source: fakeSource(20),
+      source: fakeSource(4),
       provider,
       signal: new AbortController().signal,
       mode: "endpointing",
       keywords: [],
-      onEvent: async () => {},
+      onEvent: async (event) => {
+        events.push(event);
+      },
     });
     expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("RESOURCE_ACQUIRE_FAILED");
+    }
     expect(server.connections).toBe(1);
+    expect(events.some((event) => event.type === "final")).toBe(false);
   });
 
-  it("resends unprocessed audio on the new epoch before end-of-input", async () => {
+  it("resumes with new audio on the new epoch without replaying the old", async () => {
     const secondEpochAudio: number[] = [];
     let endStreamAfterAudio = false;
     server = new SpeechTestServer(({ socket, index }) => {
@@ -607,17 +762,72 @@ describe("termination and reconnect ownership", () => {
       });
     });
     const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const events: TranscriptEvent[] = [];
     const outcome = await runTranscription({
-      source: fakeSource(20),
+      source: pacedSource(20, 25),
       provider,
       signal: new AbortController().signal,
       mode: "endpointing",
       keywords: [],
-      onEvent: async () => {},
+      onEvent: async (event) => {
+        events.push(event);
+      },
     });
     expect(outcome.isOk()).toBe(true);
-    expect(secondEpochAudio.reduce((sum, n) => sum + n, 0)).toBe(20 * 960);
+    const retransmitted = secondEpochAudio.reduce((sum, n) => sum + n, 0);
+    expect(retransmitted).toBeGreaterThan(0);
+    expect(retransmitted).toBeLessThan(20 * 960);
     expect(endStreamAfterAudio).toBe(true);
+    expect(events.some((event) => event.type === "discontinuity")).toBe(true);
+  });
+
+  it("reports per-utterance incomplete evidence when an epoch ends", async () => {
+    server = new SpeechTestServer(({ socket, index }) => {
+      acknowledge(socket);
+      if (index === 0) {
+        socket.once("message", (_data: Buffer, isBinary: boolean) => {
+          if (!isBinary) {
+            socket.send(JSON.stringify({ type: "speechStart", turnId: 7, audioProcessedMs: 100 }));
+            socket.send(
+              JSON.stringify({
+                type: "transcript",
+                transcript: "partial words",
+                final: false,
+                audioProcessedMs: 200,
+              }),
+            );
+          }
+        });
+        socket.on("message", (_data: Buffer, isBinary: boolean) => {
+          if (isBinary) {
+            socket.close(1011);
+          }
+        });
+        return;
+      }
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (!isBinary && data.toString().includes("endStream")) {
+          finishedTurn(socket, "Recovered.");
+        }
+      });
+    });
+    const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const events: TranscriptEvent[] = [];
+    const outcome = await runTranscription({
+      source: pacedSource(10, 25),
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async (event) => {
+        events.push(event);
+      },
+    });
+    expect(outcome.isOk()).toBe(true);
+    const incomplete = events.filter(
+      (event) => event.type === "discontinuity" && event.detail.includes("never finalized"),
+    );
+    expect(incomplete.length).toBeGreaterThan(0);
   });
 });
 
@@ -819,6 +1029,77 @@ describe("transcription continuity and cleanup", () => {
     expect(outcome.isErr()).toBe(true);
     expect(source.stopSeen).toBe(true);
     expect(session.terminated).toBe(true);
+  });
+
+  it("stops a waiting source promptly when the provider fails", async () => {
+    const source = hangingSource();
+    const session = new FakeSpeechSession(async function* () {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      throw appError("INTERNAL", "provider exploded");
+    });
+    const provider: SpeechProvider = {
+      providerId: "test",
+      modelId: "test",
+      openSession: async () => ok(session),
+    };
+    const started = Date.now();
+    const outcome = await runTranscription({
+      source,
+      provider,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("INTERNAL");
+    }
+    expect(source.stopSeen).toBe(true);
+    expect(session.terminated).toBe(true);
+  });
+
+  it("cancels promptly during finalization", async () => {
+    server = new SpeechTestServer(({ socket }) => {
+      acknowledge(socket);
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (!isBinary && data.toString().includes("endStream")) {
+          setTimeout(() => {
+            socket.send(
+              JSON.stringify({
+                type: "speechComplete",
+                turnId: 1,
+                transcript: "Late.",
+                audioProcessedMs: 100,
+              }),
+            );
+            socket.close(1000);
+          }, 300);
+        }
+      });
+    });
+    const controller = new AbortController();
+    const provider = providerFor(await server.url());
+    const outcome = runTranscription({
+      source: fakeSource(4),
+      provider,
+      signal: controller.signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const started = Date.now();
+    controller.abort();
+    const result = await outcome;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.code).toBe("CANCELLED");
+    }
+    await server.closed;
+    expect(server.connections).toBe(1);
   });
 
   it("terminates the session when the source fails abnormally", async () => {

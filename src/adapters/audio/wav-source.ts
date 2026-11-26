@@ -85,6 +85,8 @@ async function locateWav(
   ) {
     return err(appError("VALIDATION_FAILED", "WAV input is not a RIFF/WAVE file"));
   }
+  const riffSize = view.readUInt32LE(4);
+  const riffSane = riffSize !== 0 && riffSize !== 0xff_ff_ff_ff;
   let offset = 12;
   let format:
     { sampleRate: number; channels: number; bits: number; audioFormat: number } | undefined;
@@ -127,6 +129,9 @@ async function locateWav(
       }
       if (body + size > fileSize) {
         return err(appError("VALIDATION_FAILED", "WAV data chunk extends beyond the file"));
+      }
+      if (riffSane && body + size > 8 + riffSize) {
+        return err(appError("VALIDATION_FAILED", "WAV data chunk extends beyond its container"));
       }
       const bytesPerFrame = format.channels * 2;
       if (size % bytesPerFrame !== 0) {
@@ -191,7 +196,7 @@ class WavCaptureSource implements CaptureSource {
         chunk: { seq, startSample: framesRead, samples },
       };
       framesRead += completeFrames;
-      position += request.bytes.length;
+      position += completeFrames * bytesPerFrame;
       if ((this.options.pacing ?? "realtime") === "realtime" && framesRead < this.info.frames) {
         const sleep =
           this.options.sleep ??

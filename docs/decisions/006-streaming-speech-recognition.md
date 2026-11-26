@@ -86,39 +86,51 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   protocol tests. The adapter enforces an inbound message bound
   plus a 1,024-event queue bound, a bounded outbound buffer
   (default 262,144 bytes, about five seconds at 24 kHz), handshake
-  and drain deadlines, and actual socket termination. Sending never
+  and drain deadlines, and observed socket termination (explicit
+  terminate waits up to 2 s for the close to be observed). Sending never
   claims provider processing; `audioProcessedMs` progress is the
   only processing evidence. A send callback only frees kernel
   buffer space; the adapter races it against session termination so
   a stalled callback cannot leak the operation.
-- Handshake acknowledgement is per epoch: audio and `endStream`
-  wait for the acked socket, never for mere TCP/TLS readiness. The
-  acknowledgement schema is strict, so an error frame carrying a
-  `sessionId` cannot satisfy it. Termination and explicit shutdown
-  never create new connections; stale sockets are ignored by
-  identity; reconnect backoff is owned by the session and
-  cancellable.
+- Handshake acknowledgement is per epoch and message-order safe:
+  one persistent socket handler routes pre-acknowledgement frames
+  to handshake validation and later frames to event processing, so
+  events arriving in the same burst as the acknowledgement are
+  neither lost nor processed out of order. Provider events queue
+  behind their epoch marker, never ahead of it. The acknowledgement
+  schema is strict, so an error frame carrying a `sessionId` cannot
+  satisfy it. Termination, fatal failure, caller cancellation, and
+  explicit shutdown never create new connections; stale sockets are
+  ignored by identity; reconnect backoff is owned by the session
+  and cancellable. Readiness waits on a fresh per-epoch gate plus a
+  real cancellable deadline, not a resolved promise.
 - Reconnect is bounded (default two attempts, backoff 250 ms then
   1 s, one retry owner in the adapter) and limited to transient
-  (`1011`) and rate-limit (`1013`) closes, including after
-  end-of-input. Protocol rejections (`1008`) and authentication
-  failures are never retried. A reconnect resends only the
-  unacknowledged tail from a bounded 4 MiB buffer, paced in
-  real-time 80 ms frames; if the buffer no longer covers the
-  unprocessed range the session fails closed instead of presenting
-  an empty replacement connection. Every new epoch emits an
-  explicit discontinuity with uncertain-coverage milliseconds and
-  abandoned-turn accounting. Exactly-once recognition is not
-  claimed. Unresolved turns at normal closure are reported as
-  uncertain coverage, never promoted to final.
+  (`1011`) and rate-limit (`1013`) closes during active input.
+  Protocol rejections (`1008`), authentication failures, fatal
+  provider errors, drain timeouts, explicit termination, and caller
+  cancellation never reconnect. No audio is replayed: Muse offers
+  no resume token and `audioProcessedMs` is processing progress,
+  not durable transcript coverage, so replaying the unacknowledged
+  tail could lose an unfinished utterance's semantic beginning or
+  duplicate context-deficient recognition. Instead a fresh epoch
+  resumes with new eligible audio in order, unresolved turns are
+  reported per utterance as incomplete evidence before the reducer
+  state is discarded, and every epoch boundary emits an explicit
+  discontinuity. A connection lost after end-of-input fails
+  finalization instead of opening a replacement connection.
+  Exactly-once and seamless recovery are not claimed. Unresolved
+  turns at normal closure are reported as uncertain coverage,
+  never promoted to final.
 - WAV input never trusts the declared extent: headers are scanned
   incrementally with a 1 MiB bound, the declared data range is
-  validated against the actual file size, data is read through the
-  single owned handle, and a short read fails the operation.
-  Regular-file gating uses nonblocking acquisition, so a FIFO
-  without a writer is rejected instead of hanging. Realtime pacing
-  enforces a minimum half-chunk interval so catch-up bursts cannot
-  exceed twice the source rate.
+  validated against the actual file size and the RIFF container
+  extent, data is read through the single owned handle with
+  frame-aligned position advancement, and a short read fails the
+  operation. Regular-file gating uses nonblocking acquisition, so
+  a FIFO without a writer is rejected instead of hanging. Realtime
+  pacing enforces a minimum half-chunk interval so catch-up bursts
+  cannot exceed twice the source rate.
 - Credentials arrive only through the `MODEL_API_KEY` environment
   variable, never through arguments, URLs, logs, or fixtures.
   Production connections are restricted to `wss://api.meta.ai`;

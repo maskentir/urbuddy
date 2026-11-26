@@ -220,6 +220,31 @@ describe("WAV source extent", () => {
     expect(opened.isErr()).toBe(true);
   });
 
+  it("rejects a RIFF container smaller than its data extent", async () => {
+    const dir = makeDir();
+    const path = join(dir, "riff.wav");
+    writeWav(path, 2_400);
+    const { readFileSync } = await import("node:fs");
+    const bytes = readFileSync(path);
+    bytes.writeUInt32LE(100, 4);
+    writeFileSync(path, bytes);
+    const opened = await openWavSource(path, { pacing: "none" });
+    expect(opened.isErr()).toBe(true);
+  });
+
+  it("rejects a data chunk that is not frame aligned", async () => {
+    const dir = makeDir();
+    const path = join(dir, "odd.wav");
+    writeWav(path, 2_400);
+    const { readFileSync } = await import("node:fs");
+    const bytes = readFileSync(path);
+    const dataAt = bytes.indexOf(Buffer.from("data"));
+    bytes.writeUInt32LE(4_799, dataAt + 4);
+    writeFileSync(path, bytes.subarray(0, dataAt + 8 + 4_799));
+    const opened = await openWavSource(path, { pacing: "none" });
+    expect(opened.isErr()).toBe(true);
+  });
+
   it("fails closed when the file shrinks after acquisition", async () => {
     const dir = makeDir();
     const path = join(dir, "cut.wav");

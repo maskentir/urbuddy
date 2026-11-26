@@ -58,8 +58,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
 
 const MAX_QUEUE_EVENTS = 1_024;
 const SEND_WAIT_MS = 10_000;
-const RESEND_FRAME_BYTES = 3_840;
-const RESEND_FRAME_MS = 80;
+const TERMINATE_CLOSE_MS = 2_000;
 
 function validateEndpoint(raw: string): Result<URL, AppError> {
   let url: URL;
@@ -102,13 +101,7 @@ export interface MuseProviderOptions {
   readonly maxMessageBytes?: number;
   readonly maxReconnects?: number;
   readonly reconnectBackoffMs?: readonly number[];
-  readonly maxResendBytes?: number;
   readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
-}
-
-interface SentChunk {
-  readonly startOffset: number;
-  readonly pcm: Buffer;
 }
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -134,6 +127,8 @@ class MuseSession implements SpeechSession {
   readonly providerSessionId: string | undefined = undefined;
   private active: WebSocket | undefined;
   private pending: WebSocket | undefined;
+  private epochAnnounced = false;
+  private readonly staged: SpeechProviderEvent[] = [];
   private connectionId = 0;
   private epochGate: Promise<void> = Promise.resolve();
   private resolveEpoch: (() => void) | undefined;
@@ -147,8 +142,7 @@ class MuseSession implements SpeechSession {
   private sentBytes = 0;
   private lastProcessedMs = 0;
   private sentAtEpochStart = 0;
-  private sentLog: SentChunk[] = [];
-  private sentLogBytes = 0;
+  private readonly closeObserved = new Map<WebSocket, Promise<void>>();
   private ending = false;
   private drainDeadline: ReturnType<typeof setTimeout> | undefined;
   private readonly shutdown: AbortController;
@@ -189,11 +183,65 @@ class MuseSession implements SpeechSession {
     this.wake();
   }
 
+  private emit(event: SpeechProviderEvent): void {
+    if (this.epochAnnounced) {
+      this.push(event);
+      return;
+    }
+    if (this.staged.length >= MAX_QUEUE_EVENTS) {
+      this.fail(appError("INTERNAL", "speech event queue exceeded its bound"));
+      return;
+    }
+    this.staged.push(event);
+  }
+
+  private announceEpoch(uncertainMs: number): void {
+    this.push({ type: "connectionEpoch", epoch: this.epoch, uncertainMs });
+    this.epochAnnounced = true;
+    for (const staged of this.staged.splice(0, this.staged.length)) {
+      this.push(staged);
+    }
+  }
+
   private fail(error: AppError): void {
     this.failure ??= error;
+    this.terminated = true;
+    this.shutdown.abort();
     this.finished = true;
     this.resolveSettled?.();
     this.wake();
+  }
+
+  private renewGate(): void {
+    this.resolveEpoch?.();
+    this.resolveEpoch = undefined;
+    this.epochGate = new Promise<void>((resolve) => {
+      this.resolveEpoch = resolve;
+    });
+  }
+
+  private rejectedAfter(ms: number, signal: AbortSignal): Promise<never> {
+    return new Promise<never>((_resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        reject(appError("RESOURCE_ACQUIRE_FAILED", "speech connection is not open"));
+      }, ms);
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        reject(appError("CANCELLED", "speech connection cancelled"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  private watchClose(socket: WebSocket): Promise<void> {
+    const observed = new Promise<void>((resolve) => {
+      socket.once("close", () => {
+        resolve();
+      });
+    });
+    this.closeObserved.set(socket, observed);
+    return observed;
   }
 
   private settleShutdown(): void {
@@ -223,9 +271,8 @@ class MuseSession implements SpeechSession {
     if (this.terminated || this.options.signal.aborted) {
       return err(appError("CANCELLED", "speech connection cancelled"));
     }
-    this.epochGate = new Promise<void>((resolve) => {
-      this.resolveEpoch = resolve;
-    });
+    this.epochAnnounced = false;
+    this.renewGate();
     const endpoint = this.options.testLoopbackEndpoint ?? MUSE_REALTIME_URL;
     const validated = validateEndpoint(endpoint);
     if (validated.isErr()) {
@@ -240,35 +287,26 @@ class MuseSession implements SpeechSession {
     const attempt = this.connectionId;
     this.pending = socket;
     socket.binaryType = "nodebuffer";
+    this.watchClose(socket);
     const handshakeTimeoutMs = this.options.handshakeTimeoutMs ?? 10_000;
+    let handshakeDone = false;
+    const routeMessage = (data: WebSocket.RawData, isBinary: boolean): void => {
+      if (!this.isCurrent(socket)) {
+        return;
+      }
+      if (handshakeDone) {
+        this.onMessage(data, isBinary);
+        return;
+      }
+      handshakeDone = true;
+      settleHandshakeMessage(data, isBinary);
+    };
+    let settleHandshakeMessage: (data: WebSocket.RawData, isBinary: boolean) => void = () =>
+      undefined;
+    socket.on("message", routeMessage);
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(appError("RESOURCE_ACQUIRE_FAILED", "speech handshake timed out"));
-        }, handshakeTimeoutMs);
-        const cleanup = (): void => {
-          clearTimeout(timer);
-          this.options.signal.removeEventListener("abort", onAbort);
-        };
-        const onAbort = (): void => {
-          cleanup();
-          reject(appError("CANCELLED", "speech connection cancelled"));
-        };
-        this.options.signal.addEventListener("abort", onAbort, { once: true });
-        socket.once("open", () => {
-          const handshake = JSON.stringify({
-            authorization: { accessToken: `Bearer ${this.options.apiKey}` },
-            audioEncoding: this.encoding,
-            model: MUSE_MODEL_ID,
-            mode: this.options.mode,
-            partialMode: "CUMULATIVE",
-            emitAudioProgress: true,
-            ...(this.options.keywords.length === 0 ? {} : { keywords: [...this.options.keywords] }),
-            languageBias: ["English"],
-          });
-          socket.send(handshake);
-        });
-        socket.once("message", (data: WebSocket.RawData, isBinary: boolean) => {
+        settleHandshakeMessage = (data: WebSocket.RawData, isBinary: boolean): void => {
           cleanup();
           if (isBinary) {
             reject(appError("VALIDATION_FAILED", "speech handshake reply was not text"));
@@ -290,6 +328,41 @@ class MuseSession implements SpeechSession {
             ack.data.sessionId;
           this.sentAtEpochStart = this.sentBytes;
           resolve();
+        };
+        const timer = setTimeout(() => {
+          reject(appError("RESOURCE_ACQUIRE_FAILED", "speech handshake timed out"));
+        }, handshakeTimeoutMs);
+        const cleanup = (): void => {
+          clearTimeout(timer);
+          this.options.signal.removeEventListener("abort", onAbort);
+        };
+        const onAbort = (): void => {
+          cleanup();
+          reject(appError("CANCELLED", "speech connection cancelled"));
+        };
+        this.options.signal.addEventListener("abort", onAbort, { once: true });
+        socket.once("open", () => {
+          if (this.terminated || this.options.signal.aborted) {
+            cleanup();
+            reject(appError("CANCELLED", "speech connection cancelled"));
+            return;
+          }
+          const handshake = JSON.stringify({
+            authorization: { accessToken: `Bearer ${this.options.apiKey}` },
+            audioEncoding: this.encoding,
+            model: MUSE_MODEL_ID,
+            mode: this.options.mode,
+            partialMode: "CUMULATIVE",
+            emitAudioProgress: true,
+            ...(this.options.keywords.length === 0 ? {} : { keywords: [...this.options.keywords] }),
+            languageBias: ["English"],
+          });
+          try {
+            socket.send(handshake);
+          } catch {
+            cleanup();
+            reject(appError("RESOURCE_ACQUIRE_FAILED", "speech connection failed"));
+          }
         });
         socket.once("error", () => {
           cleanup();
@@ -324,11 +397,6 @@ class MuseSession implements SpeechSession {
     this.active = socket;
     this.resolveEpoch?.();
     this.resolveEpoch = undefined;
-    socket.on("message", (data: WebSocket.RawData, isBinary: boolean) => {
-      if (this.isCurrent(socket)) {
-        this.onMessage(data, isBinary);
-      }
-    });
     socket.on("close", (code: number) => {
       if (socket === this.active) {
         this.active = undefined;
@@ -340,7 +408,7 @@ class MuseSession implements SpeechSession {
         this.fail(appError("INTERNAL", "speech transport failed"));
       }
     });
-    this.push({ type: "connectionEpoch", epoch: this.epoch, uncertainMs });
+    this.announceEpoch(uncertainMs);
     return ok(undefined);
   }
 
@@ -386,13 +454,13 @@ class MuseSession implements SpeechSession {
     const value = event.data;
     switch (value.type) {
       case "speechStart":
-        this.push({ type: "turnStarted", turnRef: String(value.turnId) });
+        this.emit({ type: "turnStarted", turnRef: String(value.turnId) });
         break;
       case "speechEnd":
-        this.push({ type: "turnEnded", turnRef: String(value.turnId) });
+        this.emit({ type: "turnEnded", turnRef: String(value.turnId) });
         break;
       case "speechComplete":
-        this.push({
+        this.emit({
           type: "completed",
           turnRef: String(value.turnId),
           text: value.transcript,
@@ -402,7 +470,7 @@ class MuseSession implements SpeechSession {
       case "transcript":
         this.lastProcessedMs = Math.max(this.lastProcessedMs, value.audioProcessedMs);
         if (!value.final) {
-          this.push({
+          this.emit({
             type: "partial",
             text: value.transcript,
             audioProcessedMs: value.audioProcessedMs,
@@ -410,7 +478,7 @@ class MuseSession implements SpeechSession {
         }
         break;
       case "speaker":
-        this.push({
+        this.emit({
           type: "speaker",
           label: value.label,
           audioProcessedMs: value.audioProcessedMs,
@@ -418,7 +486,7 @@ class MuseSession implements SpeechSession {
         break;
       case "audioProgress":
         this.lastProcessedMs = Math.max(this.lastProcessedMs, value.audioProcessedMs);
-        this.push({ type: "progress", audioProcessedMs: value.audioProcessedMs });
+        this.emit({ type: "progress", audioProcessedMs: value.audioProcessedMs });
         break;
       case "error":
         this.fail(
@@ -434,6 +502,7 @@ class MuseSession implements SpeechSession {
   }
 
   private async onClose(_socket: WebSocket, code: number): Promise<void> {
+    this.renewGate();
     if (this.drainDeadline !== undefined) {
       clearTimeout(this.drainDeadline);
       this.drainDeadline = undefined;
@@ -444,9 +513,15 @@ class MuseSession implements SpeechSession {
       this.wake();
       return;
     }
-    if (this.ending && kind === "normal") {
-      this.finished = true;
-      this.wake();
+    if (this.ending) {
+      if (kind === "normal") {
+        this.finished = true;
+        this.wake();
+        return;
+      }
+      this.fail(
+        appError("RESOURCE_ACQUIRE_FAILED", "speech connection closed before results drained"),
+      );
       return;
     }
     if (kind === "normal") {
@@ -471,12 +546,6 @@ class MuseSession implements SpeechSession {
             : "speech connection closed unexpectedly",
         ),
       );
-      return;
-    }
-    const processedBytes = Math.floor((this.lastProcessedMs / 1000) * 48_000);
-    const resendable = this.resendableFrom(processedBytes);
-    if (resendable.isErr()) {
-      this.fail(resendable.error);
       return;
     }
     this.reconnects += 1;
@@ -507,96 +576,6 @@ class MuseSession implements SpeechSession {
     const reconnected = await this.connect(uncertainMs);
     if (reconnected.isErr()) {
       this.fail(reconnected.error);
-      return;
-    }
-    if (resendable.value.length > 0) {
-      const resent = await this.resendPaced(resendable.value);
-      if (resent.isErr()) {
-        this.fail(resent.error);
-        return;
-      }
-    }
-    if (this.ending && this.active !== undefined) {
-      this.armDrainDeadline(this.active);
-      try {
-        this.active.send(JSON.stringify({ type: "endStream" }));
-      } catch {
-        this.fail(appError("INTERNAL", "speech end-of-input send failed"));
-      }
-    }
-  }
-
-  private resendableFrom(processedBytes: number): Result<readonly Buffer[], AppError> {
-    const needed: Buffer[] = [];
-    for (const chunk of this.sentLog) {
-      if (chunk.startOffset + chunk.pcm.length <= processedBytes) {
-        continue;
-      }
-      if (chunk.startOffset > processedBytes && needed.length === 0) {
-        return err(
-          appError(
-            "RESOURCE_ACQUIRE_FAILED",
-            "speech resend buffer no longer covers unprocessed audio",
-          ),
-        );
-      }
-      needed.push(chunk.pcm);
-    }
-    if (needed.length === 0 && processedBytes < this.sentBytes) {
-      return err(
-        appError(
-          "RESOURCE_ACQUIRE_FAILED",
-          "speech resend buffer no longer covers unprocessed audio",
-        ),
-      );
-    }
-    return ok(needed);
-  }
-
-  private async resendPaced(chunks: readonly Buffer[]): Promise<Result<void, AppError>> {
-    const sleep = this.options.sleep ?? defaultSleep;
-    const combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
-    const frames: Buffer[] = [];
-    for (const chunk of chunks) {
-      for (let offset = 0; offset < chunk.length; offset += RESEND_FRAME_BYTES) {
-        frames.push(chunk.subarray(offset, offset + RESEND_FRAME_BYTES));
-      }
-    }
-    for (let index = 0; index < frames.length; index += 1) {
-      const socket = this.active;
-      if (
-        socket === undefined ||
-        socket.readyState !== WebSocket.OPEN ||
-        this.failure !== undefined ||
-        this.terminated
-      ) {
-        return err(appError("RESOURCE_ACQUIRE_FAILED", "speech connection changed during resend"));
-      }
-      const sent = await this.sendChunk(socket, frames[index] as Buffer);
-      if (sent.isErr()) {
-        return err(sent.error);
-      }
-      if (index + 1 < frames.length) {
-        try {
-          await sleep(RESEND_FRAME_MS, combined);
-        } catch (thrown: unknown) {
-          return err(toAppError(thrown, "speech connection cancelled"));
-        }
-      }
-    }
-    return ok(undefined);
-  }
-
-  private recordSent(pcm: Buffer): void {
-    const cap = this.options.maxResendBytes ?? 4_194_304;
-    this.sentLog.push({ startOffset: this.sentBytes, pcm });
-    this.sentLogBytes += pcm.length;
-    this.sentBytes += pcm.length;
-    while (this.sentLogBytes > cap && this.sentLog.length > 0) {
-      const evicted = this.sentLog.shift();
-      if (evicted !== undefined) {
-        this.sentLogBytes -= evicted.pcm.length;
-      }
     }
   }
 
@@ -624,6 +603,7 @@ class MuseSession implements SpeechSession {
 
   private async waitForActive(): Promise<Result<WebSocket, AppError>> {
     const deadline = Date.now() + SEND_WAIT_MS;
+    const combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
     for (;;) {
       if (this.failure !== undefined) {
         return err(this.failure);
@@ -635,11 +615,15 @@ class MuseSession implements SpeechSession {
       if (socket !== undefined && socket.readyState === WebSocket.OPEN) {
         return ok(socket);
       }
-      if (Date.now() > deadline) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
         return err(appError("RESOURCE_ACQUIRE_FAILED", "speech connection is not open"));
       }
-      const gate = this.epochGate;
-      await Promise.race([gate, this.settled]).catch(() => undefined);
+      await Promise.race([
+        this.epochGate,
+        this.settled,
+        this.rejectedAfter(remaining, combined),
+      ]).catch(() => undefined);
     }
   }
 
@@ -701,7 +685,7 @@ class MuseSession implements SpeechSession {
     if (sent.isErr()) {
       return err(sent.error);
     }
-    this.recordSent(pcm);
+    this.sentBytes += pcm.length;
     return ok(undefined);
   }
 
@@ -743,6 +727,19 @@ class MuseSession implements SpeechSession {
     this.settleShutdown();
     this.terminateSocket(active);
     this.terminateSocket(pending);
+    const observed: Promise<void>[] = [];
+    if (active !== undefined) {
+      observed.push(this.closeObserved.get(active) ?? Promise.resolve());
+    }
+    if (pending !== undefined && pending !== active) {
+      observed.push(this.closeObserved.get(pending) ?? Promise.resolve());
+    }
+    if (observed.length > 0) {
+      const bound = new Promise<void>((resolve) => {
+        setTimeout(resolve, TERMINATE_CLOSE_MS).unref?.();
+      });
+      await Promise.race([Promise.all(observed).then(() => undefined), bound]);
+    }
   }
 }
 

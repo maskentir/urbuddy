@@ -104,6 +104,52 @@ describe("AudioConverter", () => {
     expect(after.isOk()).toBe(true);
   });
 
+  it("accounts startup, steady state, and flush output exactly", () => {
+    const created = AudioConverter.create({ sampleRate: 48_000, channels: 1 });
+    expect(created.isOk()).toBe(true);
+    if (created.isErr()) {
+      return;
+    }
+    const signal = sine(440, 48_000, 4800, 1);
+    const first = created.value.convert(signal.subarray(0, 4800));
+    expect(first.isOk()).toBe(true);
+    if (first.isErr()) {
+      return;
+    }
+    expect(first.value.outputFrames).toBe(2369);
+    const tail = created.value.flush();
+    expect(tail.outputFrames).toBe(31);
+    expect(created.value.stats).toEqual({
+      inputFrames: 4800,
+      outputFrames: 2400,
+      clippedSamples: 0,
+      gaps: 0,
+    });
+  });
+
+  it("round-trips 24 kHz mono PCM16 within one least-significant bit", () => {
+    const created = AudioConverter.create({ sampleRate: 24_000, channels: 1 });
+    expect(created.isOk()).toBe(true);
+    if (created.isErr()) {
+      return;
+    }
+    const frames = 2400;
+    const samples = sine(440, 24_000, frames, 1);
+    const result = created.value.convert(samples);
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) {
+      return;
+    }
+    expect(result.value.pcm.length).toBe(frames * 2);
+    let worst = 0;
+    for (let i = 0; i < frames; i += 1) {
+      const expected = Math.round((samples[i] as number) * 32_767);
+      const actual = result.value.pcm.readInt16LE(i * 2);
+      worst = Math.max(worst, Math.abs(actual - expected));
+    }
+    expect(worst).toBeLessThanOrEqual(1);
+  });
+
   it("counts clipped samples while clamping output", () => {
     const created = AudioConverter.create({ sampleRate: 24_000, channels: 1 });
     expect(created.isOk()).toBe(true);

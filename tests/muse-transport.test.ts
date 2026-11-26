@@ -108,6 +108,26 @@ function fakeSource(frames = 4): CaptureSource {
   };
 }
 
+function pacedSource(frames: number, gapMs: number): CaptureSource {
+  const base = fakeSource(frames);
+  return {
+    async *items(signal: AbortSignal): AsyncIterable<SourceItem> {
+      for await (const item of base.items(signal)) {
+        yield item;
+        if (item.type === "audio") {
+          await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
+        }
+      }
+    },
+    async stop(): Promise<void> {
+      await base.stop();
+    },
+    async dispose() {
+      return base.dispose();
+    },
+  };
+}
+
 function ack(socket: WebSocket): void {
   socket.once("message", (_data: Buffer, isBinary: boolean) => {
     if (!isBinary) {
@@ -325,7 +345,7 @@ describe("Muse transport (local server)", () => {
     });
     const events: TranscriptEvent[] = [];
     const outcome = await runTranscription({
-      source: fakeSource(20),
+      source: pacedSource(20, 25),
       provider,
       signal: new AbortController().signal,
       mode: "endpointing",

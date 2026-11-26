@@ -101,6 +101,7 @@ export class TranscriptReducer {
   private currentTurnRef: string | undefined;
   private partials = 0;
   private finals = 0;
+  private readonly pending: TranscriptEvent[] = [];
 
   get partialCount(): number {
     return this.partials;
@@ -110,15 +111,40 @@ export class TranscriptReducer {
     return this.finals;
   }
 
+  drainPending(): TranscriptEvent[] {
+    return this.pending.splice(0, this.pending.length);
+  }
+
+  private collectUnresolved(reason: string): TranscriptEvent[] {
+    const unresolved: TranscriptEvent[] = [];
+    for (const turn of this.turns.values()) {
+      if (!turn.finalized) {
+        unresolved.push({
+          type: "discontinuity",
+          reason: "uncertain-coverage",
+          detail:
+            `${reason} utterance ${turn.utteranceId} never finalized; ` +
+            (turn.text.length === 0
+              ? "no transcript text was received"
+              : `last partial "${turn.text.slice(0, 120)}" is not final coverage`),
+        });
+      }
+    }
+    return unresolved;
+  }
+
   apply(event: SpeechProviderEvent): Result<TranscriptEvent | undefined, AppError> {
     switch (event.type) {
       case "connectionEpoch": {
-        const abandoned = [...this.turns.values()].filter((turn) => !turn.finalized).length;
+        const unresolved = this.collectUnresolved(`epoch ${this.epoch} ended;`);
         this.epoch = event.epoch;
         this.turns.clear();
         this.currentTurnRef = undefined;
         if (event.epoch === 0) {
           return ok(undefined);
+        }
+        for (const item of unresolved) {
+          this.pending.push(item);
         }
         return ok({
           type: "discontinuity",
@@ -126,7 +152,7 @@ export class TranscriptReducer {
           detail:
             `provider connection epoch ${event.epoch} started; ` +
             `${event.uncertainMs} ms of transmitted audio has uncertain processing coverage` +
-            (abandoned === 0 ? "" : `; ${abandoned} unresolved turn(s) abandoned`),
+            (unresolved.length === 0 ? "" : `; ${unresolved.length} unresolved turn(s) abandoned`),
         });
       }
       case "turnStarted": {
@@ -210,20 +236,7 @@ export class TranscriptReducer {
   }
 
   close(): TranscriptEvent[] {
-    const unresolved: TranscriptEvent[] = [];
-    for (const turn of this.turns.values()) {
-      if (!turn.finalized) {
-        unresolved.push({
-          type: "discontinuity",
-          reason: "uncertain-coverage",
-          detail:
-            `utterance ${turn.utteranceId} never finalized; ` +
-            (turn.text.length === 0
-              ? "no transcript text was received"
-              : `last partial "${turn.text.slice(0, 120)}" is not final coverage`),
-        });
-      }
-    }
+    const unresolved = this.collectUnresolved("session ended;");
     this.turns.clear();
     this.currentTurnRef = undefined;
     return unresolved;
@@ -325,6 +338,11 @@ export async function runTranscription(
   let session: SpeechSession | undefined;
   let converter: AudioConverter | undefined;
   let consumeEvents: Promise<void> = Promise.resolve();
+  const operation = new AbortController();
+  const releaseCallerAbort = (): void => {
+    operation.abort();
+  };
+  input.signal.addEventListener("abort", releaseCallerAbort, { once: true });
 
   const observe = async (event: TranscriptEvent): Promise<void> => {
     if (event.type === "discontinuity") {
@@ -350,9 +368,13 @@ export async function runTranscription(
           if (applied.value !== undefined) {
             await observe(applied.value);
           }
+          for (const queued of reducer.drainPending()) {
+            await observe(queued);
+          }
         }
       } catch (thrown: unknown) {
         failure ??= toAppError(thrown, "transcription event consumption failed");
+        operation.abort();
       }
     })();
   };
@@ -365,7 +387,7 @@ export async function runTranscription(
         }, input.durationMs);
   try {
     let sawEnd = false;
-    for await (const item of input.source.items(input.signal)) {
+    for await (const item of input.source.items(operation.signal)) {
       if (input.signal.aborted) {
         throw appError("CANCELLED", "transcription cancelled");
       }
@@ -467,7 +489,19 @@ export async function runTranscription(
       clearTimeout(durationTimer);
     }
     await session.endInput();
-    await consumeEvents;
+    const operationRejected = new Promise<never>((_resolve, reject) => {
+      if (operation.signal.aborted) {
+        reject(appError("CANCELLED", "transcription cancelled"));
+        return;
+      }
+      operation.signal.addEventListener(
+        "abort",
+        () => reject(appError("CANCELLED", "transcription cancelled")),
+        { once: true },
+      );
+    });
+    await Promise.race([consumeEvents, operationRejected]);
+    input.signal.removeEventListener("abort", releaseCallerAbort);
     if (failure !== undefined) {
       throw failure;
     }
@@ -476,6 +510,9 @@ export async function runTranscription(
     }
     for (const unresolved of reducer.close()) {
       await observe(unresolved);
+    }
+    for (const queued of reducer.drainPending()) {
+      await observe(queued);
     }
     const disposed = await input.source.dispose();
     if (disposed.isErr()) {
@@ -502,13 +539,38 @@ export async function runTranscription(
     if (durationTimer !== undefined) {
       clearTimeout(durationTimer);
     }
+    input.signal.removeEventListener("abort", releaseCallerAbort);
     const primary = failure ?? toAppError(thrown, "transcription failed");
-    await input.source.stop().catch(() => undefined);
+    const stopError = await input.source
+      .stop()
+      .then(() => undefined)
+      .catch((stopped: unknown) => toAppError(stopped, "transcription source stop failed"));
     if (session !== undefined) {
       await session.terminate().catch(() => undefined);
     }
     await consumeEvents.catch(() => undefined);
-    await input.source.dispose().catch(() => undefined);
-    return err(primary);
+    const disposed = await input.source
+      .dispose()
+      .catch((released: unknown) =>
+        err(toAppError(released, "transcription source release failed")),
+      );
+    const cleanupCodes: string[] = [];
+    if (stopError !== undefined) {
+      cleanupCodes.push(stopError.code);
+    }
+    if (disposed.isErr()) {
+      cleanupCodes.push(disposed.error.code);
+    }
+    if (cleanupCodes.length === 0) {
+      return err(primary);
+    }
+    const details: Record<string, string> = { ...(primary.details ?? {}) };
+    details["cleanup"] = cleanupCodes.join(",");
+    return err(
+      appError(primary.code, primary.message, {
+        ...(primary.correlationId === undefined ? {} : { correlationId: primary.correlationId }),
+        details,
+      }),
+    );
   }
 }
