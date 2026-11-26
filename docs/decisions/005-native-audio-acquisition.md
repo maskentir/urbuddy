@@ -91,3 +91,10 @@ withdrawn.
   and the summary's `signalPresent` flag.
 - Remaining verification on other hardware: consent-prompt
   behavior, device changes, and long-session stability.
+- Tests that require flowing system audio (repeated real capture,
+  native ring-overflow propagation) run only with
+  `URBUDDY_REAL_AUDIO=1` on a machine with a working output device.
+  They skip otherwise by design: hosted runners have no audio
+  hardware, and hardware-dependent tests must be opt-in rather than
+  auto-detected, because a stuck audio stack would otherwise hang
+  the suite instead of failing fast.
