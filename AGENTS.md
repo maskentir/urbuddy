@@ -177,6 +177,19 @@ Do not remove essential information solely to satisfy a cosmetic rule.
 - Do not self-approve, dismiss review findings, or merge without authorization.
 - Treat approval as applying to the reviewed commit SHA.
 
+## Living documentation and visual identity
+
+Every implementation PR evaluates its documentation impact:
+
+- Update canonical docs and README sections affected by material changes.
+- Regenerate affected artwork with `pnpm brand` and inspect the rendered result.
+- Keep documentation and affected artwork in the same PR; avoid unrelated changes.
+- Preserve the established visual identity unless explicitly redesigned.
+- Capability and milestone claims require acceptance evidence; never advertise a capability before its criteria are met.
+- Illustrative demonstrations stay labeled unless captured from the implementation.
+
+Documentation consistency is part of the Definition of Done.
+
 ## Verification
 
 Before requesting review:

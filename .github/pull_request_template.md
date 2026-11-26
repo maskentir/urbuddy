@@ -30,3 +30,8 @@ What this PR deliberately does not cover, and what would change that.
 
 Where to start reading, what to verify independently, and which checks
 must stay green in CI.
+
+## Documentation impact
+
+Which canonical docs, README sections, or generated artwork this PR
+affects, or a short justification when nothing is affected.
