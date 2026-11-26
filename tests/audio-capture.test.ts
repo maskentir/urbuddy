@@ -57,6 +57,7 @@ const ignoreSigtermScript = join(here, "support", "audio-ignore-sigterm.mjs");
 const truncatedTailScript = join(here, "support", "audio-truncated-tail.mjs");
 const abruptEndScript = join(here, "support", "audio-abrupt-end.mjs");
 const endThenHangScript = join(here, "support", "audio-end-then-hang.mjs");
+const signalDeathScript = join(here, "support", "audio-signal-death.mjs");
 
 function formatItem(): SourceItem {
   return { type: "format", seq: 0, format: { sampleRate: 48000, channels: 1 } };
@@ -802,6 +803,23 @@ describe("capture shutdown and protocol integrity", () => {
       throw new Error("live-after-end helper must not dispose cleanly");
     }
     expect(disposed.error.code).toBe("RESOURCE_RELEASE_FAILED");
+  }, 20000);
+
+  it("rejects signal termination after an end frame as successful completion", async () => {
+    const { child } = launchScript(signalDeathScript);
+    const source = new ChildCaptureSource(child, 65_536);
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+      durationMs: 10000,
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("signal death must not report clean capture");
+    }
+    expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    expect(outcome.error.message).toContain("SIGTERM");
   }, 20000);
 });
 

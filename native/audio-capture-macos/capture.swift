@@ -130,7 +130,7 @@ final class Handoff: @unchecked Sendable {
   private var capturedChunks: UInt64 = 0
   private var droppedChunks: UInt64 = 0
   private var sourceFrames: UInt64 = 0
-  private var layout: (buffers: Int, sizes: [Int])?
+  private var layout: (buffers: Int, firstSize: Int)?
   private var fatalStage: String?
 
   init(slotCount: Int, slotSamples: Int, channels: Int) {
@@ -143,7 +143,7 @@ final class Handoff: @unchecked Sendable {
   var slotSamples: Int { slots.first?.count ?? 0 }
 
   @discardableResult
-  func push(sampleCount: Int, body: (UnsafeMutablePointer<Float32>) -> Void) -> UInt64? {
+  func push(sampleCount: Int, from source: UnsafePointer<Float32>) -> UInt64? {
     os_unfair_lock_lock(&lock)
     defer { os_unfair_lock_unlock(&lock) }
     guard sampleCount > 0, sampleCount % channels == 0 else {
@@ -159,9 +159,7 @@ final class Handoff: @unchecked Sendable {
     }
     let slot = tail
     slots[slot].withUnsafeMutableBufferPointer { dest in
-      if let base = dest.baseAddress {
-        body(base)
-      }
+      dest.baseAddress?.update(from: source, count: sampleCount)
     }
     starts[slot] = start
     filled[slot] = sampleCount
@@ -198,15 +196,15 @@ final class Handoff: @unchecked Sendable {
     return layout != nil
   }
 
-  func noteLayout(buffers: Int, sizes: [Int]) {
+  func noteLayout(buffers: Int, firstSize: Int) {
     os_unfair_lock_lock(&lock)
     defer { os_unfair_lock_unlock(&lock) }
     if layout == nil {
-      layout = (buffers, sizes)
+      layout = (buffers, firstSize)
     }
   }
 
-  func takeLayout() -> (buffers: Int, sizes: [Int])? {
+  func takeLayout() -> (buffers: Int, firstSize: Int)? {
     os_unfair_lock_lock(&lock)
     defer { os_unfair_lock_unlock(&lock) }
     let out = layout
@@ -309,12 +307,12 @@ final class RealCapture {
     }
     guard let tapUID = getString(tapID, kAudioTapPropertyUID) else {
       emitState("error", attempt: 0, extra: [("stage", "\"tap-uid\"")])
-      destroyTap()
+      _ = destroyTap()
       return false
     }
     guard let tapFormat = getTapFormat(tapID) else {
       emitState("error", attempt: 0, extra: [("stage", "\"tap-format\"")])
-      destroyTap()
+      _ = destroyTap()
       return false
     }
     let isFloat = (tapFormat.mFormatFlags & kAudioFormatFlagIsFloat) != 0
@@ -322,7 +320,7 @@ final class RealCapture {
     let channelCount = tapFormat.mChannelsPerFrame
     guard isFloat, interleaved, tapFormat.mBitsPerChannel == 32, channelCount >= 1, channelCount <= 8 else {
       emitState("error", attempt: 0, extra: [("stage", "\"unsupported-format\"")])
-      destroyTap()
+      _ = destroyTap()
       return false
     }
     format = tapFormat
@@ -337,7 +335,7 @@ final class RealCapture {
     guard AudioHardwareCreateAggregateDevice(comp as CFDictionary, &aggID) == noErr, aggID != 0
     else {
       emitState("error", attempt: 0, extra: [("stage", "\"create-aggregate\"")])
-      destroyTap()
+      _ = destroyTap()
       return false
     }
     var tapProp = AudioObjectPropertyAddress(
@@ -346,14 +344,14 @@ final class RealCapture {
     var listSize: UInt32 = 0
     guard AudioObjectGetPropertyDataSize(aggID, &tapProp, 0, nil, &listSize) == noErr else {
       emitState("error", attempt: 0, extra: [("stage", "\"taplist-size\"")])
-      teardown()
+      _ = teardown()
       return false
     }
     var current: CFTypeRef?
     var csize = listSize
     guard AudioObjectGetPropertyData(aggID, &tapProp, 0, nil, &csize, &current) == noErr else {
       emitState("error", attempt: 0, extra: [("stage", "\"taplist-get\"")])
-      teardown()
+      _ = teardown()
       return false
     }
     var taps = (current as? [String]) ?? []
@@ -366,7 +364,7 @@ final class RealCapture {
     }
     guard setStatus == noErr else {
       emitState("error", attempt: 0, extra: [("stage", "\"taplist-set\"")])
-      teardown()
+      _ = teardown()
       return false
     }
     let slotSamples = Int(options.chunkFrames) * Int(channels)
@@ -401,16 +399,14 @@ final class RealCapture {
         return
       }
       if !handoff.hasLayout() {
-        handoff.noteLayout(buffers: bufferCount, sizes: [byteCount])
+        handoff.noteLayout(buffers: bufferCount, firstSize: byteCount)
       }
-      handoff.push(sampleCount: byteCount / 4) { dest in
-        let floats = data.assumingMemoryBound(to: Float32.self)
-        dest.update(from: floats, count: byteCount / 4)
-      }
+      let floats = data.assumingMemoryBound(to: Float32.self)
+      handoff.push(sampleCount: byteCount / 4, from: floats)
     }
     guard createStatus == noErr, let created else {
       emitState("error", attempt: 0, extra: [("stage", "\"create-ioproc\"")])
-      teardown()
+      _ = teardown()
       return false
     }
     procID = created
@@ -429,11 +425,13 @@ final class RealCapture {
     return false
   }
 
-  func destroyTap() {
+  func destroyTap() -> Bool {
     if tapID != 0 {
-      AudioHardwareDestroyProcessTap(tapID)
+      let status = AudioHardwareDestroyProcessTap(tapID)
       tapID = 0
+      return status == noErr
     }
+    return true
   }
 
   func teardown() -> Bool {
@@ -448,7 +446,7 @@ final class RealCapture {
       if AudioHardwareDestroyAggregateDevice(aggID) != noErr { ok = false }
       aggID = 0
     }
-    destroyTap()
+    if !destroyTap() { ok = false }
     return ok
   }
 
@@ -482,18 +480,18 @@ final class RealCapture {
     var format = AudioStreamBasicDescription()
     guard acquire(format: &format) else { return 3 }
     guard let handoff else {
-      teardown()
+      _ = teardown()
       return 3
     }
     guard start(attempt: 1) else {
-      teardown()
+      _ = teardown()
       return 3
     }
     let sampleRate = UInt32(format.mSampleRate)
     let channelCount = UInt16(format.mChannelsPerFrame)
     emitState("ready", attempt: 1)
     guard writeFrame(kind: kindFormat, seq: 0, payload: formatPayload(sampleRate: sampleRate, channels: channelCount)) else {
-      teardown()
+      _ = teardown()
       return 3
     }
     var scratch = [Float32](repeating: 0, count: handoff.slotSamples)
@@ -509,19 +507,15 @@ final class RealCapture {
         break
       }
       if let fatal = handoff.takeFatal() {
-        if fatal == "invalid-buffer" {
-          emitState("error", attempt: 1, extra: [("stage", "\"invalid-buffer\"")])
-        } else {
-          emitState("error", attempt: 1, extra: [("stage", "\"unsupported-buffer-layout\"")])
-        }
-        teardown()
+        emitState("error", attempt: 1, extra: [("stage", "\"\(fatal)\"")])
+        _ = teardown()
         return 3
       }
       if let deadline, Date() >= deadline { break }
       if !layoutReported, let layout = handoff.takeLayout() {
         layoutReported = true
         emitState("signal", attempt: 1, extra: [
-          ("buffers", "\(layout.buffers)"), ("bytes", "\"\(layout.sizes.map(String.init).joined(separator: ","))\""),
+          ("buffers", "\(layout.buffers)"), ("bytes", "\"\(layout.firstSize)\""),
         ])
       }
       if let popped = handoff.pop(into: &scratch) {
@@ -538,17 +532,21 @@ final class RealCapture {
     let stopped = stopEngine()
     let drained = drain(handoff: handoff, seq: &seq, deliveredFrames: &deliveredFrames)
     let snapshot = handoff.snapshot()
+    let tornDown = teardown()
+    guard stopped, drained, tornDown else {
+      emitState("error", attempt: 1, extra: [("stage", "\"shutdown\"")])
+      return 3
+    }
     _ = writeFrame(
       kind: kindEnd, seq: seq,
       payload: endPayload(
         captured: snapshot.captured, delivered: deliveredFrames, dropped: snapshot.dropped,
         reason: reason, sourceFrames: snapshot.sourceFrames))
-    let tornDown = teardown()
     emitState("end", attempt: 1, extra: [
       ("captured", "\(snapshot.captured)"), ("delivered", "\(deliveredFrames)"),
       ("dropped", "\(snapshot.dropped)"), ("cancelled", reason == endCancelled ? "true" : "false"),
     ])
-    return stopped && drained && tornDown ? 0 : 3
+    return 0
   }
 }
 
@@ -568,14 +566,17 @@ func runSynthetic(options: Options) -> Int32 {
   var deliveredFrames: UInt64 = 0
   var scratch = [Float32](repeating: 0, count: chunkSamples)
   var reason = endCompleted
+  var gen = [Float32](repeating: 0, count: chunkSamples)
   while produced < options.syntheticFrames && !terminationRequested {
-    handoff.push(sampleCount: chunkSamples) { dest in
-      for i in 0..<Int(options.chunkFrames) {
-        let value = Float32(0.5 * sin(phase))
-        phase += step
-        dest[i * 2] = value
-        dest[i * 2 + 1] = value
-      }
+    for i in 0..<Int(options.chunkFrames) {
+      let value = Float32(0.5 * sin(phase))
+      phase += step
+      gen[i * 2] = value
+      gen[i * 2 + 1] = value
+    }
+    gen.withUnsafeBufferPointer { src in
+      guard let base = src.baseAddress else { return }
+      handoff.push(sampleCount: chunkSamples, from: base)
     }
     produced += 1
     while let popped = handoff.pop(into: &scratch) {

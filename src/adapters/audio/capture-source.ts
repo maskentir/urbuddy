@@ -29,6 +29,7 @@ const KNOWN_STAGES = new Set([
   "invalid-buffer",
   "unsupported-buffer-layout",
   "teardown",
+  "shutdown",
 ]);
 
 const FAILURE_STAGES = new Set([...KNOWN_STAGES].filter((stage) => stage !== "signal"));
@@ -184,6 +185,7 @@ export class ChildCaptureSource implements CaptureSource {
   private endWaiters: Array<() => void> = [];
   private sawEnd = false;
   private childExited: number | null | undefined;
+  private childSignal: NodeJS.Signals | null | undefined;
   private stage: string | undefined;
   private stderrTail = "";
   private paused = false;
@@ -217,8 +219,9 @@ export class ChildCaptureSource implements CaptureSource {
     child.on("error", () => {
       this.fail(appError("RESOURCE_ACQUIRE_FAILED", "audio helper failed to start"));
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       this.childExited = code;
+      this.childSignal = signal;
       if (!this.streamEnded) {
         this.onStreamEnd();
       }
@@ -462,6 +465,12 @@ export class ChildCaptureSource implements CaptureSource {
       return err(appError("RESOURCE_RELEASE_FAILED", "audio helper required forced termination"));
     }
     const code = this.childExited;
+    const signal = this.childSignal;
+    if (signal !== undefined && signal !== null) {
+      return err(
+        appError("RESOURCE_RELEASE_FAILED", `audio helper terminated by signal ${signal}`),
+      );
+    }
     if (code !== undefined && code !== null && code !== 0) {
       return err(appError("RESOURCE_RELEASE_FAILED", "audio helper exited abnormally"));
     }

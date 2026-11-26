@@ -118,12 +118,14 @@ accumulates failure instead of stopping at the first error.
 
 ## Callback discipline
 
-The real-time callback performs no logging, no blocking calls, and
-no per-callback allocation beyond a bounded sample copy under an
-`os_unfair_lock`-guarded ring. The handoff is bounded, not lock-free:
-worst-case hold time is proportional to one chunk copy. Buffer layout
-is diagnosed once (buffer count and sizes on stderr); all later
-callbacks only copy validated samples.
+The real-time callback performs no logging and no blocking system
+calls. Working storage is preallocated, so steady-state operation
+performs no application-level heap allocation: the callback
+validates one interleaved buffer and copies it under an
+`os_unfair_lock`-guarded ring. The handoff is bounded, not
+lock-free: worst-case hold time is proportional to one device
+quantum. Buffer layout is diagnosed once (buffer count and first
+size on stderr); all later callbacks only copy validated samples.
 
 ## Source clock
 

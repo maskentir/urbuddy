@@ -35,8 +35,11 @@ advances it, including chunks lost to ring overflow, so downstream
 gap accounting sees the true timeline. The ring (`--ring-slots`,
 default 64) drops whole chunks with a counter instead of
 truncating; the TypeScript side pauses stdout past 4 MiB and reports
-drops as explicit gaps. The real-time callback allocates nothing,
-logs nothing, and never blocks; teardown checks every OSStatus.
+drops as explicit gaps. The real-time callback performs no logging
+and no blocking system calls; its working storage is preallocated, so
+steady-state operation performs no application-level heap
+allocation. The handoff uses `os_unfair_lock`: bounded waiting, not
+lock-free. Every teardown step checks its OSStatus.
 
 The helper ships without an embedded `Info.plist` and must stay
 anonymous: a bundle identifier on ad-hoc signing makes the system
