@@ -18,12 +18,14 @@ import {
   type ImmutableSessionConfig,
 } from "@modules/config/loader";
 import { effectivePolicy, isPermitted, type SecurityPolicy } from "@modules/security/policy";
-import { SessionRuntime } from "@modules/session/runtime";
+import type { EvidencePersistence } from "@modules/session/persistence";
+import { runReplay } from "@modules/session/replay";
 import { openLineSource } from "@platform/fixture";
 import { createLogger, type Logger } from "@platform/logging";
 import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
+import { err, ok, type Result } from "neverthrow";
 
 import { URBUDDY_VERSION } from "./version.js";
 
@@ -112,13 +114,51 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     nowIso: app.clock.isoNow(),
     signal,
     replayPort: createReplayPort({
-      runtime: new SessionRuntime(),
+      runOperation: runReplay,
       openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
       ...(isPermitted(app.policy, "load-native-module")
         ? {
-            openStore: async () => {
-              const { EvidenceStore } = await import("@platform/persistence/store");
-              return EvidenceStore.open(join(app.paths.data, "evidence.sqlite"));
+            openPersistence: async (): Promise<Result<EvidencePersistence, AppError>> => {
+              const { openEvidenceDatabase } = await import("@platform/persistence/database");
+              const evidence = await import("@platform/persistence/evidence");
+              const opened = openEvidenceDatabase(join(app.paths.data, "evidence.sqlite"));
+              if (opened.isErr()) {
+                return err(opened.error);
+              }
+              const handle = opened.value;
+              const persistence: EvidencePersistence = {
+                admit: async (opId) => {
+                  const result = evidence.admitOperation(handle, opId);
+                  if (result.isErr()) {
+                    return err(result.error);
+                  }
+                  if (result.value.mode !== "verify") {
+                    return ok({ mode: result.value.mode });
+                  }
+                  const verified = result.value;
+                  return ok({
+                    mode: "verify" as const,
+                    fingerprint: verified.fingerprint,
+                    summary: {
+                      ...verified.summary,
+                      sessionId: verified.sessionId,
+                      streamId: verified.streamId,
+                    },
+                  });
+                },
+                record: async (event, opId) => {
+                  const result = evidence.recordEvent(handle, { ...event, opId });
+                  return result.isOk() ? ok(undefined) : err(result.error);
+                },
+                recordGap: async (gap) => evidence.recordGap(handle, gap),
+                verify: async (event) => evidence.verifyEvent(handle, event),
+                complete: async (completion) => {
+                  const result = evidence.completeOperation(handle, completion);
+                  return result.isOk() ? ok(undefined) : err(result.error);
+                },
+                close: async () => handle.close(),
+              };
+              return ok(persistence);
             },
             newOperationId: () => randomUUID(),
           }

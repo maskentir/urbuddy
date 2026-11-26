@@ -1,4 +1,17 @@
-import { integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const operations = sqliteTable("operations", {
+  opId: text("op_id").primaryKey(),
+  status: text("status").notNull(),
+  fingerprint: text("fingerprint"),
+  sessionId: text("session_id"),
+  streamId: text("stream_id"),
+  applied: integer("applied").notNull().default(0),
+  duplicates: integer("duplicates").notNull().default(0),
+  stale: integer("stale").notNull().default(0),
+  gaps: integer("gaps").notNull().default(0),
+  missing: integer("missing").notNull().default(0),
+});
 
 export const evidenceEvents = sqliteTable(
   "evidence_events",
@@ -11,15 +24,11 @@ export const evidenceEvents = sqliteTable(
     kind: text("kind").notNull(),
     text: text("text").notNull(),
     contentHash: text("content_hash").notNull(),
+    opId: text("op_id")
+      .notNull()
+      .references(() => operations.opId),
   },
-  (table) => [
-    primaryKey({ columns: [table.sessionId, table.streamId, table.seq] }),
-    uniqueIndex("evidence_utterance_revision").on(
-      table.sessionId,
-      table.utteranceId,
-      table.revision,
-    ),
-  ],
+  (table) => [primaryKey({ columns: [table.sessionId, table.streamId, table.seq] })],
 );
 
 export const evidenceGaps = sqliteTable(
@@ -29,23 +38,14 @@ export const evidenceGaps = sqliteTable(
     streamId: text("stream_id").notNull(),
     fromSeq: integer("from_seq").notNull(),
     toSeq: integer("to_seq").notNull(),
+    opId: text("op_id")
+      .notNull()
+      .references(() => operations.opId),
   },
   (table) => [
     primaryKey({ columns: [table.sessionId, table.streamId, table.fromSeq, table.toSeq] }),
   ],
 );
-
-export const operations = sqliteTable("operations", {
-  opId: text("op_id").primaryKey(),
-  fingerprint: text("fingerprint").notNull(),
-  sessionId: text("session_id").notNull(),
-  streamId: text("stream_id").notNull(),
-  applied: integer("applied").notNull(),
-  duplicates: integer("duplicates").notNull(),
-  stale: integer("stale").notNull(),
-  gaps: integer("gaps").notNull(),
-  missing: integer("missing").notNull(),
-});
 
 export const outboxJobs = sqliteTable("outbox_jobs", {
   jobId: text("job_id").primaryKey(),

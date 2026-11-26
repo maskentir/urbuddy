@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-
 import { appError, toAppError, type AppError } from "@kernel/errors";
 import { type ReplaySummary, type SessionOutput } from "@modules/session/events";
+import type { EvidencePersistence } from "@modules/session/persistence";
+import type { runReplay } from "@modules/session/replay";
 import { stripFormatting } from "@platform/output";
-import { err, ok, type Result } from "neverthrow";
+import { err, type Result } from "neverthrow";
 
 import type { CliOutput } from "./output.js";
 
@@ -18,71 +18,15 @@ interface ReplayInput {
 
 export type ReplayPort = (input: ReplayInput) => Promise<Result<ReplaySummary, AppError>>;
 
-interface ReplayEngine {
-  run(
-    source: {
-      readonly events: AsyncIterable<unknown>;
-      dispose(): Promise<void>;
-    },
-    sink: (event: SessionOutput) => void | Promise<void>,
-    options: { readonly signal: AbortSignal },
-  ): Promise<Result<ReplaySummary, AppError>>;
-}
-
-interface EvidenceSink {
-  recordEvent(input: {
-    sessionId: string;
-    streamId: string;
-    seq: number;
-    utteranceId: string;
-    revision: number;
-    kind: "partial" | "final";
-    text: string;
-    contentHash: string;
-  }): Result<"inserted" | "duplicate", AppError>;
-  recordGap(input: {
-    sessionId: string;
-    streamId: string;
-    fromSeq: number;
-    toSeq: number;
-  }): Result<void, AppError>;
-  completeOperation(input: {
-    opId: string;
-    fingerprint: string;
-    sessionId: string;
-    streamId: string;
-    summary: {
-      applied: number;
-      duplicates: number;
-      stale: number;
-      gaps: number;
-      missing: number;
-    };
-  }): Result<
-    {
-      status: "committed" | "existing";
-      summary: {
-        applied: number;
-        duplicates: number;
-        stale: number;
-        gaps: number;
-        missing: number;
-      };
-    },
-    AppError
-  >;
-  close(): void;
-}
-
 export interface ReplayDeps {
-  readonly runtime: ReplayEngine;
+  readonly runOperation: typeof runReplay;
   readonly openSource: (
     fixture: string,
     signal: AbortSignal,
   ) => Promise<
     Result<{ readonly events: AsyncIterable<unknown>; dispose(): Promise<void> }, AppError>
   >;
-  readonly openStore?: () => Promise<Result<EvidenceSink, AppError>>;
+  readonly openPersistence?: () => Promise<Result<EvidencePersistence, AppError>>;
   readonly newOperationId?: () => string;
 }
 
@@ -105,143 +49,55 @@ function formatReplayEvent(event: SessionOutput): string {
 
 export function createReplayPort(deps: ReplayDeps): ReplayPort {
   return async (input) => {
-    const emit = async (event: SessionOutput): Promise<void> => {
-      const line = input.json ? JSON.stringify(event) : stripFormatting(formatReplayEvent(event));
-      await input.output.out(line);
-    };
     const opened = await deps.openSource(input.fixture, input.signal);
     if (opened.isErr()) {
       return err(opened.error);
     }
-    if (input.persist !== true) {
-      try {
-        return await deps.runtime.run(opened.value, emit, { signal: input.signal });
-      } catch (thrown: unknown) {
-        return err(toAppError(thrown, "replay failed"));
-      }
-    }
-    if (deps.openStore === undefined) {
-      await opened.value.dispose().catch(() => undefined);
-      return err(appError("VALIDATION_FAILED", "persistence requires native module authorization"));
-    }
-    const storeResult = await deps.openStore();
-    if (storeResult.isErr()) {
-      await opened.value.dispose().catch(() => undefined);
-      return err(storeResult.error);
-    }
-    const store = storeResult.value;
-    const operationId = input.operationId ?? deps.newOperationId?.() ?? "";
-    if (operationId === "") {
-      store.close();
-      await opened.value.dispose().catch(() => undefined);
-      return err(appError("VALIDATION_FAILED", "persistent replay requires an operation id"));
-    }
-    const fingerprint = createHash("sha256");
-    let identity: { sessionId: string; streamId: string } | undefined;
-    const captureIdentity = (raw: unknown): void => {
-      if (identity !== undefined || typeof raw !== "object" || raw === null) {
-        return;
-      }
-      const record = raw as Record<string, unknown>;
-      if (typeof record["sessionId"] === "string" && typeof record["streamId"] === "string") {
-        identity = { sessionId: record["sessionId"], streamId: record["streamId"] };
-      }
-    };
-    const peekingSource = {
-      events: (async function* (): AsyncGenerator<unknown, void, void> {
-        for await (const raw of opened.value.events) {
-          captureIdentity(raw);
-          yield raw;
-        }
-      })(),
-      dispose: opened.value.dispose,
+    const emit = async (event: SessionOutput): Promise<void> => {
+      const line = input.json ? JSON.stringify(event) : stripFormatting(formatReplayEvent(event));
+      await input.output.out(line);
     };
     try {
-      const outcome = await deps.runtime.run(
-        peekingSource,
-        async (event) => {
-          if (event.type === "completed") {
-            identity = { sessionId: event.summary.sessionId, streamId: event.summary.streamId };
-            return;
-          }
-          if (event.type === "applied") {
-            const contentHash = createHash("sha256").update(event.text).digest("hex");
-            fingerprint.update(
-              JSON.stringify([
-                event.seq,
-                event.utteranceId,
-                event.revision,
-                event.kind,
-                contentHash,
-              ]),
-            );
-            if (identity !== undefined) {
-              const recorded = store.recordEvent({
-                sessionId: identity.sessionId,
-                streamId: identity.streamId,
-                seq: event.seq,
-                utteranceId: event.utteranceId,
-                revision: event.revision,
-                kind: event.kind,
-                text: event.text,
-                contentHash,
-              });
-              if (recorded.isErr()) {
-                throw recorded.error;
-              }
-            }
-          } else if (event.type === "gap" && identity !== undefined) {
-            fingerprint.update(JSON.stringify(["gap", event.from, event.to]));
-            const recorded = store.recordGap({
-              sessionId: identity.sessionId,
-              streamId: identity.streamId,
-              fromSeq: event.from,
-              toSeq: event.to,
-            });
-            if (recorded.isErr()) {
-              throw recorded.error;
-            }
-          }
-          if (identity === undefined && event.type === "applied") {
-            throw appError("VALIDATION_FAILED", "persistent replay lost session identity");
-          }
-          await emit(event);
-        },
-        { signal: input.signal },
-      );
-      if (outcome.isErr()) {
-        return outcome;
+      if (input.persist !== true) {
+        return await deps.runOperation({
+          source: opened.value,
+          sink: emit,
+          signal: input.signal,
+        });
       }
-      if (identity === undefined) {
-        identity = { sessionId: outcome.value.sessionId, streamId: outcome.value.streamId };
+      if (deps.openPersistence === undefined) {
+        await opened.value.dispose().catch(() => undefined);
+        return err(
+          appError("VALIDATION_FAILED", "persistence requires native module authorization"),
+        );
       }
-      const completed = store.completeOperation({
-        opId: operationId,
-        fingerprint: fingerprint.digest("hex"),
-        sessionId: identity.sessionId,
-        streamId: identity.streamId,
-        summary: {
-          applied: outcome.value.applied,
-          duplicates: outcome.value.duplicates,
-          stale: outcome.value.stale,
-          gaps: outcome.value.gaps,
-          missing: outcome.value.missing,
-        },
+      const storeResult = await deps.openPersistence();
+      if (storeResult.isErr()) {
+        await opened.value.dispose().catch(() => undefined);
+        return err(storeResult.error);
+      }
+      const operationId = input.operationId ?? deps.newOperationId?.() ?? "";
+      if (operationId === "") {
+        await storeResult.value.close().catch(() => undefined);
+        await opened.value.dispose().catch(() => undefined);
+        return err(appError("VALIDATION_FAILED", "persistent replay requires an operation id"));
+      }
+      if (input.operationId === undefined) {
+        await input.output.out(
+          input.json
+            ? JSON.stringify({ type: "operation", opId: operationId })
+            : `operation: ${operationId}`,
+        );
+      }
+      return await deps.runOperation({
+        source: opened.value,
+        sink: emit,
+        signal: input.signal,
+        persistence: storeResult.value,
+        operationId,
       });
-      if (completed.isErr()) {
-        return err(completed.error);
-      }
-      const summary: ReplaySummary = {
-        sessionId: identity.sessionId,
-        streamId: identity.streamId,
-        ...completed.value.summary,
-      };
-      await emit({ type: "completed", summary });
-      return ok(summary);
     } catch (thrown: unknown) {
       return err(toAppError(thrown, "replay failed"));
-    } finally {
-      store.close();
     }
   };
 }
