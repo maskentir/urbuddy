@@ -26,3 +26,9 @@ Diagnostics keep precise codes and correlation IDs while carrying no
 foreign text. Any new error producer must go through the factory;
 shape-matching shortcuts are rejected by regression tests, including
 hostile-Proxy totality probes.
+
+Scope: the brand separates factory errors from foreign lookalikes for
+application error handling. It is not an unforgeable cross-boundary
+security guarantee: it does not survive serialization, cloning, or
+process boundaries, and it does not replace sandboxing, authentication,
+or authorization.

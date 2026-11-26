@@ -3,8 +3,10 @@
 Urbuddy is a real-time language intelligence runtime with the terminal
 as one consumer of that runtime. The data plane (capture, streaming,
 translation, persistence) operates independently of the intelligence,
-memory, and learning planes: if Graphiti, the LLM, or the learner is
-down, live captioning keeps working.
+memory, and learning planes. If Graphiti, the LLM, or the learner is
+down, STT captions keep working. If the translation provider fails,
+the original transcription remains available but translated output is
+not guaranteed.
 
 ## Logical structure
 
@@ -31,7 +33,8 @@ Status values: `selected` (direction locked, not yet proven),
 | Area                   | Selection                                                                              | Status                              |
 | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------- |
 | Runtime                | Node.js 24, strict TypeScript, pnpm, NodeNext ESM                                      | implemented, verified               |
-| Streaming              | Native streams, async iterables, `AbortSignal`                                         | implemented, verified               |
+| Cancellation lifecycle | `AbortSignal`, `ResourceScope`, bounded disposal                                       | implemented, verified               |
+| Streaming pipeline     | Native streams, async iterables, backpressure                                          | selected                            |
 | Audio capture          | Swift macOS Core Audio Tap; ScreenCaptureKit only as explicitly authorized alternative | selected                            |
 | Primary STT            | Muse                                                                                   | selected                            |
 | Secondary STT          | Soniox as an explicitly selected mode, never a silent fallback                         | selected                            |
@@ -64,13 +67,21 @@ integrations wired only by the composition root.
 - `presentation`: CLI and terminal UI. Wired only by bootstrap.
 - `adapters`: vendor API translation into kernel contracts.
 
+Adapters and infrastructure may implement public application-owned
+ports; domain and application logic must remain independent of
+infrastructure implementations. The current dependency-cruiser rules
+are foundation constraints: they will be refined when concrete ports
+appear, not treated as a mandate to move every contract into kernel.
+
 No `utils`, `helpers`, or `common` catch-alls. Public entry points
 expose intentional contracts through explicit named exports.
 
 ## Architectural invariants
 
 - The real-time data plane stays independent of optional
-  intelligence, memory, and learning subsystems.
+  intelligence, memory, and learning subsystems. STT captions survive
+  their failure; translation output additionally requires a working
+  translation provider.
 - Deterministic execution owns correctness; LLM supervision is
   advisory.
 - Provisional preview is always separable from committed output.
@@ -111,21 +122,28 @@ and durability guarantees fail closed and are recorded as unverified.
 
 ## Service-level objectives (proposed, unmeasured)
 
-These are draft targets for discussion, not achieved performance.
-Each must be benchmarked on target hardware before becoming a
-release gate.
+Production Qualification cannot pass with an unresolved mandatory
+gate. Performance targets are aspirational benchmarks, not release
+criteria, until measured on target hardware.
 
-| Objective                                                   | Draft target |
-| ----------------------------------------------------------- | ------------ |
-| Audio to first useful translation, p95                      | <= 1.5 s     |
-| Final contextual translation, p95 from semantic-unit end    | <= 2.5 s     |
-| Acknowledged transcript loss under the failure model        | 0            |
-| Continuous session endurance incl. provider rotation        | 8 h          |
-| Silent audio gaps (every detected gap is recorded)          | 0            |
-| Stale revision overwrites                                   | 0            |
-| Critical semantic errors on the mandatory regression corpus | 0            |
-| Idle memory growth                                          | bounded      |
-| Unauthorized data egress                                    | 0            |
+### Mandatory release gates
+
+| Objective                                                   | Required |
+| ----------------------------------------------------------- | -------- |
+| Acknowledged transcript loss under the failure model        | 0        |
+| Silent audio gaps (every detected gap is recorded)          | 0        |
+| Stale revision overwrites                                   | 0        |
+| Critical semantic errors on the mandatory regression corpus | 0        |
+| Unauthorized data egress                                    | 0        |
+
+### Aspirational performance targets
+
+| Objective                                                | Draft target |
+| -------------------------------------------------------- | ------------ |
+| Audio to first useful translation, p95                   | <= 1.5 s     |
+| Final contextual translation, p95 from semantic-unit end | <= 2.5 s     |
+| Continuous session endurance incl. provider rotation     | 8 h          |
+| Idle memory growth                                       | bounded      |
 
 ## Evidence status and gaps
 

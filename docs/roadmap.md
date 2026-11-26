@@ -28,7 +28,8 @@ Acceptance gate: reviewed foundation merged. Met by
 ## 2. Core Runtime — next
 
 Product outcome: an executable offline session replay that proves the
-runtime's streaming semantics before any live provider is involved.
+runtime's streaming semantics before any live provider is involved,
+followed by durable persistence for session evidence.
 
 Dependencies: Application Foundation.
 
@@ -37,8 +38,16 @@ ordering, bounded processing, backpressure, cancellation.
 
 Non-goals: live audio capture, provider integration, translation.
 
-Acceptance gate: executable offline session replay with recorded
-ordering, gap accounting, and cancellation behavior.
+Acceptance gates, in order, each through a separate implementation
+PR:
+
+1. Executable offline session replay with recorded ordering, gap
+   accounting, and cancellation behavior. This first replay PR is
+   not expanded with persistence work.
+2. Durable persistence: SQLite evidence durability (per-database WAL
+   and synchronous policy, commit acknowledgement, crash recovery)
+   and transactional outbox semantics (enqueue, claim, retry without
+   loss or duplication).
 
 ## 3. Speech Perception — planned
 
@@ -145,5 +154,6 @@ and distribution evidence; reproducible packaging and upgrades.
 
 Non-goals: SaaS operations, fleet management.
 
-Acceptance gate: every SLO in [architecture](./architecture.md) is
-either measured green or explicitly open with an owner and a plan.
+Acceptance gate: every mandatory release gate in
+[architecture](./architecture.md) is measured green; aspirational
+performance targets may remain open only with an owner and a plan.
