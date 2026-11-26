@@ -782,7 +782,37 @@ describe.runIf(helperAvailable)("native capture verification", () => {
     return resolved.value;
   }
 
-  it("starts and stops real capture repeatedly", async () => {
+  async function probeRealCapture(ctx: {
+    skip: () => void;
+  }): Promise<{ ok: true } | { skipped: true }> {
+    const child = spawn(helperPath(), ["--run-ms", "1200"], { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout?.resume();
+    let stderr = "";
+    child.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString("utf8");
+    });
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+    });
+    if (stderr.includes('"state":"ready"')) {
+      return { ok: true };
+    }
+    const stage = stderr
+      .split("\n")
+      .map((line) => parseStageLine(line))
+      .find((found) => found !== undefined);
+    if (stage === "default-output" || stage === "output-uid") {
+      ctx.skip();
+      return { skipped: true };
+    }
+    throw new Error(`real capture probe failed at stage ${stage ?? "unknown"}`);
+  }
+
+  it("starts and stops real capture repeatedly", async (ctx) => {
+    const probed = await probeRealCapture(ctx);
+    if ("skipped" in probed) {
+      return;
+    }
     for (let round = 0; round < 3; round += 1) {
       const spawned = spawnAudioSource({ helperPath: helperPath() });
       if (spawned.isErr()) {
@@ -803,6 +833,10 @@ describe.runIf(helperAvailable)("native capture verification", () => {
   }, 30000);
 
   it("propagates native ring overflow into reported gaps", async (ctx) => {
+    const probed = await probeRealCapture(ctx);
+    if ("skipped" in probed) {
+      return;
+    }
     const sinePath = join(tmpdir(), `urbuddy-overflow-${Date.now()}.wav`);
     writeSineFixture(sinePath, 15);
     const player = spawn("afplay", [sinePath], { stdio: "ignore" });
