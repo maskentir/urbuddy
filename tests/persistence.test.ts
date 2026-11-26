@@ -695,25 +695,63 @@ describe("commit-before-acknowledgement barrier", () => {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
-    let seen = "";
-    child.stdout.on("data", (chunk: unknown) => {
-      seen += String(chunk);
+    let childExited = child.exitCode !== null || child.signalCode !== null;
+    child.once("exit", () => {
+      childExited = true;
     });
-    for (let attempt = 0; attempt < 400 && !existsSync(marker); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    expect(existsSync(marker)).toBe(true);
-    expect(seen).not.toContain("replay complete");
-    const probe = new Database(join(dir, "evidence.sqlite"), { readonly: true });
-    const status = probe.prepare("SELECT status FROM operations WHERE op_id = 'op-ack'").get() as {
-      status: string;
+    const ensureDead = async (): Promise<void> => {
+      try {
+        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      } catch {
+        return;
+      }
+      await Promise.race([
+        new Promise<void>((resolve) => child.once("exit", () => resolve())),
+        new Promise<void>((resolve) => setTimeout(() => resolve(), 5000)),
+      ]);
     };
-    expect(status.status).toBe("completed");
-    probe.close();
-    if (child.pid !== undefined) {
-      process.kill(-child.pid, "SIGKILL");
+    let reaped = false;
+    try {
+      let seen = "";
+      child.stdout.on("data", (chunk: unknown) => {
+        seen += String(chunk);
+      });
+      for (let attempt = 0; attempt < 400 && !existsSync(marker); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(marker)).toBe(true);
+      expect(seen).not.toContain("replay complete");
+      const probe = new Database(join(dir, "evidence.sqlite"), { readonly: true });
+      const status = probe
+        .prepare("SELECT status FROM operations WHERE op_id = 'op-ack'")
+        .get() as {
+        status: string;
+      };
+      expect(status.status).toBe("completed");
+      probe.close();
+      await new Promise((resolve) => setImmediate(resolve));
+      if (childExited || child.exitCode !== null || child.signalCode !== null) {
+        throw new Error("harness exited before the controlled kill");
+      }
+      if (child.pid !== undefined) {
+        process.kill(-child.pid, "SIGKILL");
+      }
+      const closed = await Promise.race([
+        new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+      ]);
+      if (!closed) {
+        throw new Error("harness did not terminate after SIGKILL");
+      }
+      reaped = true;
+      expect(child.signalCode).toBe("SIGKILL");
+    } finally {
+      if (!reaped) {
+        await ensureDead();
+      }
     }
-    await new Promise((resolve) => child.once("exit", resolve));
     const before = openStore(dir);
     const evidenceBefore = countEvidence(before);
     const jobsBefore = countJobs(before);
