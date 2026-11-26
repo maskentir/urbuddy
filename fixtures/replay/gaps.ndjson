@@ -1,0 +1,7 @@
+{"sessionId":"s-2","streamId":"st-2","seq":0,"kind":"partial","utteranceId":"u1","revision":0,"text":"a"}
+{"sessionId":"s-2","streamId":"st-2","seq":2,"kind":"partial","utteranceId":"u1","revision":1,"text":"a b"}
+{"sessionId":"s-2","streamId":"st-2","seq":1,"kind":"partial","utteranceId":"u2","revision":0,"text":"x"}
+{"sessionId":"s-2","streamId":"st-2","seq":3,"kind":"partial","utteranceId":"u1","revision":1,"text":"a b"}
+{"sessionId":"s-2","streamId":"st-2","seq":4,"kind":"partial","utteranceId":"u1","revision":0,"text":"a"}
+{"sessionId":"s-2","streamId":"st-2","seq":5,"kind":"final","utteranceId":"u1","revision":2,"text":"a b."}
+{"sessionId":"s-2","streamId":"st-2","seq":6,"kind":"partial","utteranceId":"u1","revision":3,"text":"a b c"}

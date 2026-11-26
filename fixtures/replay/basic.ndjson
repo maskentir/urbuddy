@@ -1,0 +1,5 @@
+{"sessionId":"s-1","streamId":"st-1","seq":0,"kind":"partial","utteranceId":"u1","revision":0,"text":"hello"}
+{"sessionId":"s-1","streamId":"st-1","seq":1,"kind":"partial","utteranceId":"u1","revision":1,"text":"hello there"}
+{"sessionId":"s-1","streamId":"st-1","seq":2,"kind":"final","utteranceId":"u1","revision":2,"text":"hello there."}
+{"sessionId":"s-1","streamId":"st-1","seq":3,"kind":"partial","utteranceId":"u2","revision":0,"text":"we need to vet"}
+{"sessionId":"s-1","streamId":"st-1","seq":4,"kind":"final","utteranceId":"u2","revision":1,"text":"we need to vet the proposal."}
