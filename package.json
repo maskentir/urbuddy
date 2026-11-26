@@ -22,6 +22,7 @@
     "knip": "knip",
     "smoke": "tsx src/bootstrap/main.ts doctor",
     "ink-smoke": "tsx src/bootstrap/main.ts --ink-smoke",
+    "brand": "node tooling/generate-brand.mjs",
     "doctor": "tsx src/bootstrap/main.ts doctor --json",
     "prebuild": "rm -rf dist"
   },
