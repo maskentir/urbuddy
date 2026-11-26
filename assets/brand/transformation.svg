@@ -14,7 +14,40 @@
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 </style>
 
-<g class="rise"><polygon points="36,36 400,28 392,220 420,228 388,288 30,280" fill="#151515"/><text x="64" y="76" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="26" fill="#F4F0DF">FAST ENGLISH IN</text></g>
+<g class="rise"><polygon points="36,36 400,28 392,220 420,228 388,288 30,280" fill="#151515"/><text x="64" y="76" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="26" fill="#F4F0DF" textLength="300" lengthAdjust="spacingAndGlyphs">FAST ENGLISH IN</text></g>
+<g class="rise" style="animation-delay:.1s" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" fill="#FF633B"><text x="330" y="120" font-size="34" transform="rotate(8 330,120)">?</text><text x="52" y="160" font-size="26" transform="rotate(-9 52,160)">?</text></g>
+<g opacity=".55" transform="translate(9,5)"><g>
+<rect class="eq" style="animation-delay:0.00s" x="60.0" y="148.2" width="7.0" height="41.8" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.13s" x="70.0" y="180.5" width="7.0" height="9.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.26s" x="80.0" y="125.5" width="7.0" height="64.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.39s" x="90.0" y="143.2" width="7.0" height="46.8" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.52s" x="100.0" y="174.3" width="7.0" height="15.7" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.65s" x="110.0" y="114.6" width="7.0" height="75.4" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.78s" x="120.0" y="109.8" width="7.0" height="80.2" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.00s" x="130.0" y="118.1" width="7.0" height="71.9" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.13s" x="140.0" y="179.3" width="7.0" height="10.7" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.26s" x="150.0" y="168.8" width="7.0" height="21.2" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.39s" x="160.0" y="107.6" width="7.0" height="82.4" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.52s" x="170.0" y="135.0" width="7.0" height="55.0" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.65s" x="180.0" y="142.3" width="7.0" height="47.7" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.78s" x="190.0" y="126.1" width="7.0" height="63.9" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.00s" x="200.0" y="148.5" width="7.0" height="41.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.13s" x="210.0" y="179.5" width="7.0" height="10.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.26s" x="220.0" y="173.1" width="7.0" height="16.9" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.39s" x="230.0" y="177.7" width="7.0" height="12.3" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.52s" x="240.0" y="149.0" width="7.0" height="41.0" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.65s" x="250.0" y="141.4" width="7.0" height="48.6" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.78s" x="260.0" y="102.0" width="7.0" height="88.0" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.00s" x="270.0" y="179.2" width="7.0" height="10.8" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.13s" x="280.0" y="159.8" width="7.0" height="30.2" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.26s" x="290.0" y="163.0" width="7.0" height="27.0" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.39s" x="300.0" y="172.6" width="7.0" height="17.4" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.52s" x="310.0" y="166.5" width="7.0" height="23.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.65s" x="320.0" y="165.7" width="7.0" height="24.3" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.78s" x="330.0" y="183.3" width="7.0" height="6.7" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.00s" x="340.0" y="115.5" width="7.0" height="74.5" fill="#8A8672"/>
+<rect class="eq" style="animation-delay:0.13s" x="350.0" y="140.2" width="7.0" height="49.8" fill="#8A8672"/>
+</g></g>
 <g>
 <rect class="eq" style="animation-delay:0.00s" x="60.0" y="148.2" width="7.0" height="41.8" fill="#8A8672"/>
 <rect class="eq" style="animation-delay:0.13s" x="70.0" y="180.5" width="7.0" height="9.5" fill="#8A8672"/>

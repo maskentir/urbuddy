@@ -17,33 +17,37 @@
 <pattern id="cap-dots" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(28)"><circle cx="4" cy="4" r="2" fill="#151515" fill-opacity=".22"/></pattern>
 </defs>
 <rect width="900" height="380" fill="url(#cap-dots)" opacity=".5"/>
-<g class="rise" style="animation-delay:0.00s">
-<polygon points="36,24 446,30 438,142 36,136" fill="#151515"/>
-<text x="56" y="60" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E">LIVE CAPTIONS</text>
-<text x="56" y="90" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">bilingual streaming panels,</text>
-<text x="56" y="112" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">revision-stable</text>
-<rect x="328" y="36" width="104" height="26" fill="#F4F0DF"/><text x="338" y="55" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text>
-</g>
-<g class="rise" style="animation-delay:0.12s">
-<polygon points="454,24 864,30 856,142 454,136" fill="#151515"/>
-<text x="474" y="60" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E">TRANSLATION</text>
-<text x="474" y="90" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">contextual EN to ID,</text>
-<text x="474" y="112" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">negation-safe</text>
-<rect x="746" y="36" width="104" height="26" fill="#F4F0DF"/><text x="756" y="55" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text>
-</g>
-<g class="rise" style="animation-delay:0.24s">
-<polygon points="36,158 446,164 438,276 36,270" fill="#151515"/>
-<text x="56" y="194" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E">CATCH-UP</text>
-<text x="56" y="224" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">missed-context recovery,</text>
-<text x="56" y="246" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">grounded answers</text>
-<rect x="328" y="170" width="104" height="26" fill="#F4F0DF"/><text x="338" y="189" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text>
-</g>
-<g class="rise" style="animation-delay:0.36s">
-<polygon points="454,158 864,164 856,276 454,270" fill="#151515"/>
-<text x="474" y="194" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E">VOCABULARY</text>
-<text x="474" y="224" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">personal difficulty model,</text>
-<text x="474" y="246" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">spaced repetition</text>
-<rect x="746" y="170" width="104" height="26" fill="#F4F0DF"/><text x="756" y="189" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text>
-</g>
-<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515">SHIPPED IN 0.1.0: typed errors, config, lifecycle, CLI, smoke</text></g>
+<g class="rise" style="animation-delay:0.00s"><g transform="rotate(-1.2 241 83)">
+<polygon points="36,24 446,32 436,142 42,134" fill="#151515"/>
+<text x="56" y="62" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">LIVE CAPTIONS</text>
+<text x="56" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">bilingual streaming panels,</text>
+<text x="56" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">revision-stable</text>
+
+<g transform="rotate(-4 380 49)"><rect x="324" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="334" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+</g></g>
+<g class="rise" style="animation-delay:0.12s"><g transform="rotate(1.2 659 83)">
+<polygon points="454,24 864,32 854,142 460,134" fill="#151515"/>
+<text x="474" y="62" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">TRANSLATION</text>
+<text x="474" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">contextual EN to ID,</text>
+<text x="474" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">negation-safe</text>
+
+<g transform="rotate(-4 798 49)"><rect x="742" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+</g></g>
+<g class="rise" style="animation-delay:0.24s"><g transform="rotate(-1.2 241 217)">
+<polygon points="36,158 446,166 436,276 42,268" fill="#151515"/>
+<text x="56" y="196" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">CATCH-UP</text>
+<text x="56" y="226" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">missed-context recovery,</text>
+<text x="56" y="248" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">grounded answers</text>
+<polygon points="96,272 140,272 108,298" fill="#151515"/>
+<g transform="rotate(-4 380 183)"><rect x="324" y="170" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="334" y="190" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+</g></g>
+<g class="rise" style="animation-delay:0.36s"><g transform="rotate(1.2 659 217)">
+<polygon points="454,158 864,166 854,276 460,268" fill="#151515"/>
+<text x="474" y="196" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">VOCABULARY</text>
+<text x="474" y="226" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">personal difficulty model,</text>
+<text x="474" y="248" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">spaced repetition</text>
+
+<g transform="rotate(-4 798 183)"><rect x="742" y="170" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="190" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+</g></g>
+<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED IN 0.1.0: typed errors, config, lifecycle, CLI, smoke</text></g>
 </svg>
