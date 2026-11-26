@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { open, type FileHandle } from "node:fs/promises";
+import { open, stat, type FileHandle } from "node:fs/promises";
 
 import { appError, type AppError } from "@kernel/errors";
 import { err, ok, type Result } from "neverthrow";
@@ -7,6 +7,11 @@ import { err, ok, type Result } from "neverthrow";
 export interface LineSource {
   readonly events: AsyncIterable<unknown>;
   dispose(): Promise<void>;
+}
+
+export interface LineSourceOptions {
+  readonly maxLineBytes?: number;
+  readonly signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_LINE_BYTES = 1_048_576;
@@ -43,8 +48,15 @@ async function* readLines(
       throw fixtureFailure(`replay fixture line ${number} is not valid JSON`);
     }
   };
+  const iterator = stream[Symbol.asyncIterator]();
+  let failure: unknown;
   try {
-    for await (const chunk of stream) {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done === true) {
+        break;
+      }
+      const chunk = next.value;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
       pending = Buffer.concat([pending, buffer]);
       if (pending.length > maxLineBytes + 65_536) {
@@ -63,14 +75,20 @@ async function* readLines(
       }
     }
   } catch (thrown: unknown) {
+    failure = thrown;
+  }
+  if (typeof iterator.return === "function") {
+    await iterator.return().catch(() => undefined);
+  }
+  if (failure !== undefined) {
     if (
-      typeof thrown === "object" &&
-      thrown !== null &&
-      (thrown as { code?: unknown }).code === "ENOENT"
+      typeof failure === "object" &&
+      failure !== null &&
+      (failure as { code?: unknown }).code === "ENOENT"
     ) {
       throw fixtureFailure("cannot read replay fixture");
     }
-    throw thrown;
+    throw failure;
   }
   if (pending.length > 0) {
     lineNumber += 1;
@@ -83,17 +101,22 @@ async function* readLines(
 
 export async function openLineSource(
   path: string,
-  maxLineBytes = DEFAULT_MAX_LINE_BYTES,
+  options: LineSourceOptions = {},
 ): Promise<Result<LineSource, AppError>> {
+  const maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
   let handle: FileHandle;
   try {
+    const before = await stat(path);
+    if (!before.isFile()) {
+      return err(fixtureFailure("replay fixture must be a regular file"));
+    }
     handle = await open(path, "r");
   } catch {
     return err(fixtureFailure("cannot read replay fixture"));
   }
   try {
-    const stats = await handle.stat();
-    if (!stats.isFile()) {
+    const after = await handle.stat();
+    if (!after.isFile()) {
       await handle.close().catch(() => undefined);
       return err(fixtureFailure("replay fixture must be a regular file"));
     }
@@ -102,6 +125,16 @@ export async function openLineSource(
     return err(fixtureFailure("cannot read replay fixture"));
   }
   const stream = handle.createReadStream();
+  const onAbort = (): void => {
+    stream.destroy();
+  };
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      stream.destroy();
+    } else {
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
   let disposed = false;
   return ok({
     events: readLines(stream, maxLineBytes),
@@ -110,13 +143,27 @@ export async function openLineSource(
         return;
       }
       disposed = true;
-      try {
-        if (!stream.destroyed) {
-          stream.destroy();
-          await once(stream, "close");
+      options.signal?.removeEventListener("abort", onAbort);
+      let firstError: unknown;
+      if (!stream.closed) {
+        const closed = once(stream, "close").catch((thrown: unknown) => {
+          if (!stream.closed) {
+            firstError ??= thrown;
+          }
+        });
+        stream.destroy();
+        await closed;
+        if (!stream.closed && firstError === undefined) {
+          firstError = new Error("fixture stream did not close");
         }
-      } finally {
-        await handle.close().catch(() => undefined);
+      }
+      try {
+        await handle.close();
+      } catch (thrown: unknown) {
+        firstError ??= thrown;
+      }
+      if (firstError !== undefined) {
+        throw firstError;
       }
     },
   });

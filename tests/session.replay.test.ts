@@ -14,7 +14,7 @@ import { SessionRuntime, type ReplaySource } from "@modules/session/runtime";
 import { openLineSource } from "@platform/fixture";
 import { exitCodeForError, runCli, type CliDeps } from "@presentation/cli";
 import type { CliOutput } from "@presentation/output";
-import { runReplaySession } from "@presentation/replay";
+import { createReplayPort } from "@presentation/replay";
 import type { Result } from "neverthrow";
 import { describe, expect, it } from "vitest";
 
@@ -350,7 +350,10 @@ function testDeps(signal?: AbortSignal): CliDeps {
     correlationId: created.correlationId,
     nowIso: created.clock.isoNow(),
     signal: signal ?? new AbortController().signal,
-    replayPort: runReplaySession,
+    replayPort: createReplayPort({
+      runtime: new SessionRuntime(),
+      openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
+    }),
   };
 }
 
@@ -497,7 +500,7 @@ describe("review regressions", () => {
     expect(summaryOf(outputs)).toMatchObject({ summary: { applied: 2, duplicates: 0, stale: 1 } });
   });
 
-  it("classifies identical final retransmission as duplicate, contradictory as stale", async () => {
+  it("classifies identical final retransmission as duplicate, contradictory as error", async () => {
     const dup = await collect(
       sourceOf([
         event({ seq: 0, kind: "final", revision: 1, text: "done." }),
@@ -513,10 +516,10 @@ describe("review regressions", () => {
         event({ seq: 1, kind: "final", revision: 1, text: "changed." }),
       ]),
     );
-    expect(contra.outputs[contra.outputs.length - 2]).toMatchObject({
-      type: "stale",
-      reason: "finalized",
-    });
+    expect(contra.outcome.isErr()).toBe(true);
+    if (contra.outcome.isErr()) {
+      expect(contra.outcome.error.code).toBe("VALIDATION_FAILED");
+    }
   });
 
   it("rejects conflicting reuse of the same sequence", async () => {
@@ -524,6 +527,19 @@ describe("review regressions", () => {
       sourceOf([
         event({ seq: 0, utteranceId: "u1", text: "a" }),
         event({ seq: 0, utteranceId: "u2", text: "x" }),
+      ]),
+    );
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("VALIDATION_FAILED");
+    }
+  });
+
+  it("does not collide distinct events through delimiter injection", async () => {
+    const { outcome } = await collect(
+      sourceOf([
+        event({ seq: 0, utteranceId: "p|5|final|q", kind: "final", revision: 5, text: "r" }),
+        event({ seq: 0, utteranceId: "p", kind: "final", revision: 5, text: "q|5|final|r" }),
       ]),
     );
     expect(outcome.isErr()).toBe(true);
@@ -653,7 +669,11 @@ describe("review regressions", () => {
         captured.output,
       ),
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
-    const viaPort = await runReplaySession({
+    const port = testDeps().replayPort;
+    if (port === undefined) {
+      throw new Error("replay port must be wired in tests");
+    }
+    const viaPort = await port({
       fixture: fixture("malformed.ndjson"),
       json: false,
       signal: new AbortController().signal,

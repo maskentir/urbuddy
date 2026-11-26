@@ -42,8 +42,10 @@ Four planned capabilities, one per product workflow
 ([docs/product.md](./docs/product.md)): live bilingual captions,
 contextual translation, missed-context catch-up, and a personal
 vocabulary that grows from real meetings. What ships today is the
-foundation: typed errors, validated configuration, resource
-lifecycle, CLI, and smoke paths.
+foundation — typed errors, validated configuration, resource
+lifecycle, CLI, and smoke paths — plus the first Core Runtime slice:
+deterministic offline session replay through the `replay` command.
+Core Runtime stays in progress until durable persistence lands.
 
 ## Under the hood
 

@@ -56,12 +56,16 @@ function hashText(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function eventHash(event: StreamEvent): string {
-  return hashText(`${event.utteranceId}|${event.revision}|${event.kind}|${event.text}`);
+function hashEvent(event: StreamEvent): string {
+  return hashText(JSON.stringify([event.utteranceId, event.revision, event.kind, event.text]));
 }
 
 function invalid(message: string): AppError {
   return appError("VALIDATION_FAILED", message);
+}
+
+function cancelled(): AppError {
+  return appError("CANCELLED", "replay cancelled");
 }
 
 export class SessionRuntime {
@@ -86,12 +90,25 @@ export class SessionRuntime {
       await source.dispose().catch(() => undefined);
       return err(invalid("replay resource limits are invalid"));
     }
-    const outcome = await this.processStream(source, sink, options.signal, bounds);
+    let outcome: Result<ReplaySummary, AppError>;
+    try {
+      outcome = await this.processStream(source, sink, options.signal, bounds);
+    } catch (thrown: unknown) {
+      outcome = err(toAppError(thrown, "replay failed"));
+    }
     try {
       await source.dispose();
     } catch (thrown: unknown) {
       if (outcome.isOk()) {
         return err(toAppError(thrown, "replay cleanup failed"));
+      }
+      return outcome;
+    }
+    if (outcome.isOk()) {
+      try {
+        await sink({ type: "completed", summary: outcome.value });
+      } catch (thrown: unknown) {
+        return err(toAppError(thrown, "replay failed"));
       }
     }
     return outcome;
@@ -99,6 +116,36 @@ export class SessionRuntime {
 
   private async processStream(
     source: ReplaySource,
+    sink: ReplaySink,
+    signal: AbortSignal | undefined,
+    bounds: ReplayBounds,
+  ): Promise<Result<ReplaySummary, AppError>> {
+    let iterator: AsyncIterator<unknown>;
+    try {
+      iterator = source.events[Symbol.asyncIterator]();
+    } catch (thrown: unknown) {
+      return err(toAppError(thrown, "replay failed"));
+    }
+    let outcome: Result<ReplaySummary, AppError>;
+    try {
+      outcome = await this.consume(iterator, sink, signal, bounds);
+    } catch (thrown: unknown) {
+      outcome = err(toAppError(thrown, "replay failed"));
+    }
+    if (typeof iterator.return === "function") {
+      try {
+        await iterator.return();
+      } catch (thrown: unknown) {
+        if (outcome.isOk()) {
+          return err(toAppError(thrown, "replay cleanup failed"));
+        }
+      }
+    }
+    return outcome;
+  }
+
+  private async consume(
+    iterator: AsyncIterator<unknown>,
     sink: ReplaySink,
     signal: AbortSignal | undefined,
     bounds: ReplayBounds,
@@ -118,100 +165,95 @@ export class SessionRuntime {
       gaps: 0,
       missing: 0,
     };
-    const iterator = source.events[Symbol.asyncIterator]();
-    try {
-      for (;;) {
-        if (signal !== undefined && signal.aborted) {
-          return err(appError("CANCELLED", "replay cancelled"));
-        }
-        const next = await iterator.next();
-        if (next.done === true) {
-          break;
-        }
-        const parsed = streamEventSchema.safeParse(next.value);
-        if (!parsed.success) {
-          return err(
-            appError("VALIDATION_FAILED", "replay event failed validation", {
-              details: {
-                issues: parsed.error.issues.map((issue) => issue.message).join("; "),
-              },
-            }),
-          );
-        }
-        const event = parsed.data;
-        if (
-          byteLength(event.sessionId) > bounds.maxIdBytes ||
-          byteLength(event.streamId) > bounds.maxIdBytes ||
-          byteLength(event.utteranceId) > bounds.maxIdBytes
-        ) {
-          return err(invalid("replay event identifier exceeds the size bound"));
-        }
-        if (byteLength(event.text) > bounds.maxTextBytes) {
-          return err(invalid("replay event text exceeds the size bound"));
-        }
-        if (adopted === undefined) {
-          adopted = { sessionId: event.sessionId, streamId: event.streamId };
-        } else if (event.sessionId !== adopted.sessionId || event.streamId !== adopted.streamId) {
-          return err(invalid("replay event identity mismatch"));
-        }
-        if (event.seq < expectedSeq) {
-          if (event.seq === lastSeq) {
-            if (eventHash(event) !== lastSeqHash) {
-              return err(invalid("contradictory replay event"));
-            }
-            counts.duplicates += 1;
-            await sink({
-              type: "duplicate",
-              seq: event.seq,
-              utteranceId: event.utteranceId,
-              revision: event.revision,
-            });
-            continue;
+    for (;;) {
+      if (signal !== undefined && signal.aborted) {
+        return err(cancelled());
+      }
+      const next = await iterator.next();
+      if (signal !== undefined && signal.aborted) {
+        return err(cancelled());
+      }
+      if (next.done === true) {
+        break;
+      }
+      const parsed = streamEventSchema.safeParse(next.value);
+      if (!parsed.success) {
+        return err(
+          appError("VALIDATION_FAILED", "replay event failed validation", {
+            details: {
+              issues: parsed.error.issues.map((issue) => issue.message).join("; "),
+            },
+          }),
+        );
+      }
+      const event = parsed.data;
+      if (
+        byteLength(event.sessionId) > bounds.maxIdBytes ||
+        byteLength(event.streamId) > bounds.maxIdBytes ||
+        byteLength(event.utteranceId) > bounds.maxIdBytes
+      ) {
+        return err(invalid("replay event identifier exceeds the size bound"));
+      }
+      if (byteLength(event.text) > bounds.maxTextBytes) {
+        return err(invalid("replay event text exceeds the size bound"));
+      }
+      if (adopted === undefined) {
+        adopted = { sessionId: event.sessionId, streamId: event.streamId };
+      } else if (event.sessionId !== adopted.sessionId || event.streamId !== adopted.streamId) {
+        return err(invalid("replay event identity mismatch"));
+      }
+      if (event.seq < expectedSeq) {
+        if (event.seq === lastSeq) {
+          if (hashEvent(event) !== lastSeqHash) {
+            return err(invalid("contradictory replay event"));
           }
-          counts.stale += 1;
+          counts.duplicates += 1;
           await sink({
-            type: "stale",
+            type: "duplicate",
             seq: event.seq,
             utteranceId: event.utteranceId,
             revision: event.revision,
-            reason: "superseded",
           });
           continue;
         }
-        if (event.seq > expectedSeq) {
-          counts.gaps += 1;
-          counts.missing += event.seq - expectedSeq;
-          await sink({ type: "gap", from: expectedSeq, to: event.seq });
+        counts.stale += 1;
+        await sink({
+          type: "stale",
+          seq: event.seq,
+          utteranceId: event.utteranceId,
+          revision: event.revision,
+          reason: "superseded",
+        });
+        continue;
+      }
+      if (event.seq > expectedSeq) {
+        counts.gaps += 1;
+        counts.missing += event.seq - expectedSeq;
+        await sink({ type: "gap", from: expectedSeq, to: event.seq });
+        if (signal !== undefined && signal.aborted) {
+          return err(cancelled());
         }
-        lastSeq = event.seq;
-        lastSeqHash = eventHash(event);
-        const applied = this.applyEvent(event, utterances, counts, bounds);
-        if (applied.isErr()) {
-          return err(applied.error);
-        }
-        await sink(applied.value);
-        expectedSeq = event.seq + 1;
       }
-      if (signal !== undefined && signal.aborted) {
-        return err(appError("CANCELLED", "replay cancelled"));
+      lastSeq = event.seq;
+      lastSeqHash = hashEvent(event);
+      const applied = this.applyEvent(event, utterances, counts, bounds);
+      if (applied.isErr()) {
+        return err(applied.error);
       }
-      if (adopted === undefined) {
-        return err(invalid("replay fixture contains no events"));
-      }
-      const summary: ReplaySummary = {
-        sessionId: adopted.sessionId,
-        streamId: adopted.streamId,
-        ...counts,
-      };
-      await sink({ type: "completed", summary });
-      return ok(summary);
-    } catch (thrown: unknown) {
-      return err(toAppError(thrown, "replay failed"));
-    } finally {
-      if (typeof iterator.return === "function") {
-        await iterator.return().catch(() => undefined);
-      }
+      await sink(applied.value);
+      expectedSeq = event.seq + 1;
     }
+    if (signal !== undefined && signal.aborted) {
+      return err(cancelled());
+    }
+    if (adopted === undefined) {
+      return err(invalid("replay fixture contains no events"));
+    }
+    return ok({
+      sessionId: adopted.sessionId,
+      streamId: adopted.streamId,
+      ...counts,
+    });
   }
 
   private applyEvent(
@@ -254,6 +296,25 @@ export class SessionRuntime {
         revision: event.revision,
       });
     }
+    if (event.revision === stored.revision) {
+      if (!stored.finalized && event.kind === "final" && contentHash === stored.contentHash) {
+        utterances.set(event.utteranceId, {
+          revision: event.revision,
+          contentHash,
+          finalized: true,
+        });
+        counts.applied += 1;
+        return ok({
+          type: "applied",
+          seq: event.seq,
+          utteranceId: event.utteranceId,
+          revision: event.revision,
+          kind: event.kind,
+          text: event.text,
+        });
+      }
+      return err(invalid("contradictory replay event"));
+    }
     if (stored.finalized) {
       counts.stale += 1;
       return ok({
@@ -272,25 +333,6 @@ export class SessionRuntime {
         utteranceId: event.utteranceId,
         revision: event.revision,
         reason: "superseded",
-      });
-    }
-    if (event.revision === stored.revision) {
-      if (contentHash !== stored.contentHash) {
-        return err(invalid("contradictory replay event"));
-      }
-      utterances.set(event.utteranceId, {
-        revision: event.revision,
-        contentHash,
-        finalized: true,
-      });
-      counts.applied += 1;
-      return ok({
-        type: "applied",
-        seq: event.seq,
-        utteranceId: event.utteranceId,
-        revision: event.revision,
-        kind: event.kind,
-        text: event.text,
       });
     }
     utterances.set(event.utteranceId, {

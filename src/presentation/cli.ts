@@ -159,11 +159,8 @@ export function extractGlobalFlags(argv: readonly string[]): ConfigFlags {
   return toConfigFlags(probe.opts<GlobalOptionValues>());
 }
 
-function defaultOutput(): CliOutput {
-  return createStreamOutput(process.stdout, process.stderr);
-}
-
-export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()): Command {
+export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Command {
+  const output = providedOutput ?? createStreamOutput(process.stdout, process.stderr, deps.signal);
   const program = new Command();
   addGlobalOptions(program);
   program

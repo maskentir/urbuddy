@@ -15,10 +15,12 @@ import {
   type ImmutableSessionConfig,
 } from "@modules/config/loader";
 import { effectivePolicy, type SecurityPolicy } from "@modules/security/policy";
+import { SessionRuntime } from "@modules/session/runtime";
+import { openLineSource } from "@platform/fixture";
 import { createLogger, type Logger } from "@platform/logging";
 import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
-import { runReplaySession } from "@presentation/replay";
+import { createReplayPort } from "@presentation/replay";
 
 import { URBUDDY_VERSION } from "./version.js";
 
@@ -105,7 +107,10 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     correlationId: app.correlationId,
     nowIso: app.clock.isoNow(),
     signal,
-    replayPort: runReplaySession,
+    replayPort: createReplayPort({
+      runtime: new SessionRuntime(),
+      openSource: (fixture, sourceSignal) => openLineSource(fixture, { signal: sourceSignal }),
+    }),
   };
 }
 
