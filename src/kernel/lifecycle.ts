@@ -64,17 +64,18 @@ export class ResourceScope {
   private disposal: Promise<Result<void, AppError>> | undefined;
   private terminal: Result<void, AppError> | undefined;
   private failure: AppError | undefined;
+  private disposalStarted = false;
 
   get size(): number {
     return this.resources.length;
   }
 
   get isDisposed(): boolean {
-    return this.terminal !== undefined;
+    return this.terminal !== undefined && this.terminal.isOk();
   }
 
   register(resource: ManagedResource): Result<void, AppError> {
-    if (this.terminal !== undefined || this.disposal !== undefined) {
+    if (this.disposalStarted) {
       return err(appError("RESOURCE_ACQUIRE_FAILED", "scope is closed for registration"));
     }
     const kind = resourceKindSchema.safeParse(resource.kind);
@@ -95,6 +96,7 @@ export class ResourceScope {
       return this.disposal;
     }
     const run = this.runDisposal(signal);
+    this.disposalStarted = true;
     this.disposal = run;
     try {
       return await run;

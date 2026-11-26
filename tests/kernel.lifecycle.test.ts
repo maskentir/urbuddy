@@ -227,6 +227,30 @@ describe("lifecycle", () => {
     expect(scope.isDisposed).toBe(true);
   });
 
+  it("refuses registration after an incomplete disposal", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.resolve(),
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await scope.disposeAll(controller.signal);
+    expect(outcome.isErr()).toBe(true);
+    const late = scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.resolve(),
+    });
+    expect(late.isErr()).toBe(true);
+    if (late.isErr()) {
+      expect(late.error.code).toBe("RESOURCE_ACQUIRE_FAILED");
+    }
+    expect(scope.size).toBe(1);
+  });
+
   it("rejects registration while a disposal run is in flight", async () => {
     const scope = new ResourceScope();
     const ids = createDeterministicIdGenerator("lc");
@@ -273,7 +297,7 @@ describe("lifecycle", () => {
     if (outcome.isErr()) {
       expect(outcome.error.code).toBe("CANCELLED");
     }
-    expect(scope.isDisposed).toBe(true);
+    expect(scope.isDisposed).toBe(false);
     expect(scope.size).toBe(1);
   });
 
