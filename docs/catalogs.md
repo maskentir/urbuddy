@@ -6,11 +6,11 @@ review-blocking defect.
 
 ## Commands (`src/kernel/commands.ts`)
 
-| name                   | enforced by                                        |
-| ---------------------- | -------------------------------------------------- |
-| `doctor [--json]`      | commander action in `cli.ts`                       |
-| `version`              | commander action in `cli.ts`                       |
-| `replay [--json] <fx>` | commander action in `cli.ts`, runtime in `session` |
+| name                               | enforced by                                        |
+| ---------------------------------- | -------------------------------------------------- |
+| `doctor [--json]`                  | commander action in `cli.ts`                       |
+| `version`                          | commander action in `cli.ts`                       |
+| `replay [--json] [--persist] <fx>` | commander action in `cli.ts`, runtime in `session` |
 
 Commander owns argument parsing. The typed catalog holds the command
 names (`COMMAND_NAMES`) and their help text (`commandHelp`); every

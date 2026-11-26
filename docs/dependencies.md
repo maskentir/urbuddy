@@ -4,21 +4,23 @@ Pinned exactly; `pnpm-lock.yaml` is the integrity record (`pnpm ls`
 clean at adoption, reproducible via `pnpm install --frozen-lockfile`).
 Rule: a dependency is installed only when a component consumes it.
 Deferred libraries (p-queue, p-retry, execa, undici, ws,
-OpenTelemetry, drizzle, xstate, …) are compat-checked but NOT installed.
+OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 
 ## Runtime
 
-| package    | version | license | engines         | consumed by                                            | owner               |
-| ---------- | ------- | ------- | --------------- | ------------------------------------------------------ | ------------------- |
-| commander  | 15.1.0  | MIT     | >=22.12         | `src/presentation/cli.ts` (help/version/doctor/--json) | presentation        |
-| env-paths  | 4.0.0   | MIT     | >=20            | `src/platform/paths.ts`                                | platform            |
-| ink        | 8.0.0   | MIT     | >=22            | `src/presentation/ink-smoke.tsx`                       | presentation        |
-| pino       | 10.4.0  | MIT     | none declared   | `src/platform/logging.ts` transport (policy wrapper)   | platform            |
-| neverthrow | 8.2.0   | MIT     | >=18, zero deps | `Result` contracts in kernel/config/lifecycle          | kernel              |
-| react      | 19.3.1  | MIT     | >=0.10          | Ink peer                                               | presentation        |
-| strip-ansi | 7.2.0   | MIT     | >=12            | `src/platform/output.ts` sanitize                      | platform            |
-| ts-pattern | 5.9.2   | MIT     | none            | exhaustive command + exit-code dispatch                | kernel/presentation |
-| zod        | 4.6.7   | MIT     | none            | config, resources, log-level schemas                   | kernel/modules      |
+| package        | version | license    | engines         | consumed by                                                      | owner               |
+| -------------- | ------- | ---------- | --------------- | ---------------------------------------------------------------- | ------------------- |
+| better-sqlite3 | 13.2.0  | MIT        | >=22            | `src/platform/persistence/store.ts` (native driver, lazy-loaded) | platform            |
+| drizzle-orm    | 0.45.4  | Apache-2.0 | none            | `src/platform/persistence/` schema + queries                     | platform            |
+| commander      | 15.1.0  | MIT        | >=22.12         | `src/presentation/cli.ts` (help/version/doctor/--json)           | presentation        |
+| env-paths      | 4.0.0   | MIT        | >=20            | `src/platform/paths.ts`                                          | platform            |
+| ink            | 8.0.0   | MIT        | >=22            | `src/presentation/ink-smoke.tsx`                                 | presentation        |
+| pino           | 10.4.0  | MIT        | none declared   | `src/platform/logging.ts` transport (policy wrapper)             | platform            |
+| neverthrow     | 8.2.0   | MIT        | >=18, zero deps | `Result` contracts in kernel/config/lifecycle                    | kernel              |
+| react          | 19.3.1  | MIT        | >=0.10          | Ink peer                                                         | presentation        |
+| strip-ansi     | 7.2.0   | MIT        | >=12            | `src/platform/output.ts` sanitize                                | platform            |
+| ts-pattern     | 5.9.2   | MIT        | none            | exhaustive command + exit-code dispatch                          | kernel/presentation |
+| zod            | 4.6.7   | MIT        | none            | config, resources, log-level schemas                             | kernel/modules      |
 
 ## Development
 
@@ -30,6 +32,7 @@ OpenTelemetry, drizzle, xstate, …) are compat-checked but NOT installed.
 | @vitest/coverage-v8             | 5.1.2   | MIT        | inherits vitest         | coverage (pinned in lockstep, peer is exact)          | tests        |
 | fast-check                      | 4.11.0  | MIT        | >=12.17                 | seeded precedence property (seed 20261126)            | tests        |
 | @types/react                    | 19.3.3  | MIT        | n/a (types)             | satisfies ink peer `>=19.3.0`                         | presentation |
+| @types/better-sqlite3           | 9.6.0   | MIT        | n/a (types)             | native driver declarations                            | platform     |
 | @types/node                     | 24.19.4 | MIT        | n/a (types)             | node builtins for the Node 24 target line             | platform     |
 | eslint                          | 10.15.0 | MIT        | ^20.19\|\|^22.13\|>=24  | `pnpm lint`                                           | tooling      |
 | typescript-eslint               | 8.74.0  | MIT        | ^18.18\|\|^20.9\|>=21.1 | `eslint.config.js` (peer range satisfied)             | tooling      |
