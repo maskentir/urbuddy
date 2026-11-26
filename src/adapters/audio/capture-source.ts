@@ -26,9 +26,15 @@ const KNOWN_STAGES = new Set([
   "signal",
   "unsupported-os",
   "unsupported-platform",
+  "invalid-buffer",
+  "unsupported-buffer-layout",
+  "teardown",
 ]);
 
+const FAILURE_STAGES = new Set([...KNOWN_STAGES].filter((stage) => stage !== "signal"));
+
 const STARTUP_TIMEOUT_MS = 5_000;
+const EXIT_GRACE_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const STOP_SIGNAL_WAIT_MS = 2_000;
 const DISPOSE_TIMEOUT_MS = 5_000;
@@ -173,6 +179,7 @@ export class ChildCaptureSource implements CaptureSource {
     | undefined;
   private fatal: AppError | undefined;
   private protocolBroken: AppError | undefined;
+  private failureStage: string | undefined;
   private streamEnded = false;
   private endWaiters: Array<() => void> = [];
   private sawEnd = false;
@@ -194,7 +201,12 @@ export class ChildCaptureSource implements CaptureSource {
   ) {
     this.startupTimer = setTimeout(() => {
       if (!this.ready) {
-        this.fail(appError("RESOURCE_ACQUIRE_FAILED", "audio helper did not become ready"));
+        this.fail(
+          appError(
+            "RESOURCE_ACQUIRE_FAILED",
+            `audio helper did not become ready${this.stageSuffix()}`,
+          ),
+        );
       }
     }, STARTUP_TIMEOUT_MS);
     child.stdout?.on("data", (data: Buffer) => this.onData(data));
@@ -219,7 +231,7 @@ export class ChildCaptureSource implements CaptureSource {
               : `audio helper failed during ${this.stage}`,
           ),
         );
-      } else if (code !== 0 && code !== null) {
+      } else if (code !== 0 && code !== null && !this.sawEnd) {
         this.fail(appError("INTERNAL", "audio helper exited unexpectedly"));
       }
     });
@@ -247,6 +259,10 @@ export class ChildCaptureSource implements CaptureSource {
     this.fail(this.protocolBroken);
   }
 
+  private stageSuffix(): string {
+    return this.failureStage === undefined ? "" : ` (helper reported ${this.failureStage})`;
+  }
+
   private onStderr(data: Buffer): void {
     const text = data.toString("utf8");
     this.stderrTail = `${this.stderrTail}${text}`.slice(-2048);
@@ -254,6 +270,9 @@ export class ChildCaptureSource implements CaptureSource {
       const stage = parseStageLine(line);
       if (stage !== undefined) {
         this.stage = stage;
+        if (this.failureStage === undefined && FAILURE_STAGES.has(stage)) {
+          this.failureStage = stage;
+        }
       }
     }
   }
@@ -392,7 +411,10 @@ export class ChildCaptureSource implements CaptureSource {
           if (signal.aborted) {
             throw appError("CANCELLED", "capture cancelled");
           }
-          throw appError("VALIDATION_FAILED", "capture ended without helper acknowledgement");
+          throw appError(
+            "VALIDATION_FAILED",
+            `capture ended without helper acknowledgement${this.stageSuffix()}`,
+          );
         }
         yield outcome.value;
       }
@@ -428,30 +450,43 @@ export class ChildCaptureSource implements CaptureSource {
       this.shutdownTimer = undefined;
     }
     this.child.stdout?.resume();
-    await this.forceReap();
+    const reaped = await this.forceReap();
     await this.awaitStreamEnded(STOP_SIGNAL_WAIT_MS);
     if (this.protocolBroken !== undefined) {
       return err(this.protocolBroken);
     }
-    if (!this.sawEnd && this.childExited === undefined) {
+    if (reaped === "unreaped") {
       return err(appError("RESOURCE_RELEASE_FAILED", "audio helper did not terminate"));
+    }
+    if (reaped === "killed") {
+      return err(appError("RESOURCE_RELEASE_FAILED", "audio helper required forced termination"));
+    }
+    const code = this.childExited;
+    if (code !== undefined && code !== null && code !== 0) {
+      return err(appError("RESOURCE_RELEASE_FAILED", "audio helper exited abnormally"));
     }
     return ok(undefined);
   }
 
-  private async forceReap(): Promise<void> {
+  private async forceReap(): Promise<"exited" | "killed" | "unreaped"> {
     if (this.childExited !== undefined) {
-      return;
+      return "exited";
+    }
+    await this.awaitClose(EXIT_GRACE_MS);
+    if (this.childExited !== undefined) {
+      return "exited";
     }
     if (!this.stopSent) {
       this.stopSent = true;
       this.child.kill("SIGTERM");
     }
-    const closed = await this.awaitClose(STOP_SIGNAL_WAIT_MS);
-    if (!closed && this.childExited === undefined) {
-      this.child.kill("SIGKILL");
-      await this.awaitClose(DISPOSE_TIMEOUT_MS - STOP_SIGNAL_WAIT_MS);
+    await this.awaitClose(STOP_SIGNAL_WAIT_MS);
+    if (this.childExited !== undefined) {
+      return "exited";
     }
+    this.child.kill("SIGKILL");
+    await this.awaitClose(DISPOSE_TIMEOUT_MS - STOP_SIGNAL_WAIT_MS);
+    return this.childExited !== undefined ? "killed" : "unreaped";
   }
 
   private awaitClose(timeoutMs: number): Promise<boolean> {

@@ -220,9 +220,15 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
       if (deps.capturePort === undefined) {
         throw new Error("capture is not wired");
       }
+      if (!/^\d+$/.test(options.duration)) {
+        throw appError("VALIDATION_FAILED", "capture duration must be 1 to 300 seconds");
+      }
       const durationSeconds = Number.parseInt(options.duration, 10);
       if (!Number.isSafeInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 300) {
         throw appError("VALIDATION_FAILED", "capture duration must be 1 to 300 seconds");
+      }
+      if (!/^\d+$/.test(options.syntheticFrames)) {
+        throw appError("VALIDATION_FAILED", "synthetic frame count must be 0 to 100000");
       }
       const syntheticFrames = Number.parseInt(options.syntheticFrames, 10);
       if (

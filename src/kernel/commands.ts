@@ -11,7 +11,8 @@ export function commandHelp(name: CommandName): string {
     .with("replay", () => "replay [--json] <fixture>  replay a synthetic transcript fixture")
     .with(
       "capture",
-      () => "capture [--duration s]  capture macOS system audio (requires --allow-child)",
+      () =>
+        "capture [--duration s]  capture system-wide macOS system audio (requires --allow-child)",
     )
     .exhaustive();
 }

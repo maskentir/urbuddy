@@ -91,6 +91,51 @@ withdrawn.
   and the summary's `signalPresent` flag.
 - Remaining verification on other hardware: consent-prompt
   behavior, device changes, and long-session stability.
+
+## Terminal contract
+
+Four distinct facts, verified independently:
+
+- Complete evidence: an end frame plus counter reconciliation
+  (delivered frames match received frames; received frames plus gap
+  widths match the helper source clock).
+- Successful native teardown: the end frame is written only after
+  the engine is stopped, the ring is drained, and every teardown
+  step reports success. A teardown failure produces no end frame.
+- Confirmed subprocess termination: the supervisor observes process
+  close; forced termination (SIGKILL) or an abnormal exit code after
+  an end frame fails the operation instead of reporting clean success.
+- Successful operation: all of the above. There is no qualified
+  success; a failed cleanup is an error, never a warning attached
+  to success.
+
+## Resource ownership
+
+Stopping the device and destroying the IOProc are distinct states.
+The IOProc handle is retained until destruction is attempted and
+observed; stopping never releases it. Teardown reports each step and
+accumulates failure instead of stopping at the first error.
+
+## Callback discipline
+
+The real-time callback performs no logging, no blocking calls, and
+no per-callback allocation beyond a bounded sample copy under an
+`os_unfair_lock`-guarded ring. The handoff is bounded, not lock-free:
+worst-case hold time is proportional to one chunk copy. Buffer layout
+is diagnosed once (buffer count and sizes on stderr); all later
+callbacks only copy validated samples.
+
+## Source clock
+
+Continuity is tracked by a software counter in tap-delivered frames,
+advanced on every captured callback including dropped ones. It is
+not a hardware timestamp and must not be presented as one; it is
+sufficient for gap accounting because every case where the exact
+extent is unavailable terminates the session instead of guessing.
+Empty callbacks carry no time and are not counted. A non-divisible
+or multi-buffer layout fails closed rather than producing
+misdescribed audio.
+
 - Tests that require flowing system audio (repeated real capture,
   native ring-overflow propagation) run only with
   `URBUDDY_REAL_AUDIO=1` on a machine with a working output device.

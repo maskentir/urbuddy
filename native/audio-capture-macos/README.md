@@ -23,6 +23,13 @@ Protocol: stdout carries little-endian binary frames
 `sourceFrames u64`). Diagnostics and counters go to stderr as JSON
 lines; no audio content is ever written to logs or disk.
 
+The tap is expected to deliver exactly one interleaved buffer per
+callback; any other layout fails closed instead of risking
+misdescribed channels. The end frame is written only after the
+engine is stopped, the ring is drained, and every teardown step
+succeeds — an end frame therefore acknowledges both complete
+evidence and successful native cleanup.
+
 Capture positions use the source clock: every captured callback
 advances it, including chunks lost to ring overflow, so downstream
 gap accounting sees the true timeline. The ring (`--ring-slots`,

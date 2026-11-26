@@ -56,6 +56,7 @@ const floodScript = join(here, "support", "audio-frame-flood.mjs");
 const ignoreSigtermScript = join(here, "support", "audio-ignore-sigterm.mjs");
 const truncatedTailScript = join(here, "support", "audio-truncated-tail.mjs");
 const abruptEndScript = join(here, "support", "audio-abrupt-end.mjs");
+const endThenHangScript = join(here, "support", "audio-end-then-hang.mjs");
 
 function formatItem(): SourceItem {
   return { type: "format", seq: 0, format: { sampleRate: 48000, channels: 1 } };
@@ -515,6 +516,18 @@ describe("capture presentation", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
+  it("rejects non-numeric durations instead of coercing them", async () => {
+    const program = cliProgram({
+      capturePort: createCapturePort({ runSession: runCaptureSession, clock: fixedClock(0) }),
+    });
+    await expect(
+      program.parseAsync(["node", "urbuddy", "capture", "--duration", "10abc"]),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(
+      program.parseAsync(["node", "urbuddy", "capture", "--synthetic-frames", "2x"]),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
   it("reports a silent capture honestly", async () => {
     const { output, lines } = testOutput();
     const port = createCapturePort({
@@ -756,7 +769,7 @@ describe("capture shutdown and protocol integrity", () => {
     expect(outcome.error.code).toBe("VALIDATION_FAILED");
   }, 20000);
 
-  it("accepts complete evidence when the helper exits abnormally after its end", async () => {
+  it("rejects an abnormal post-end exit instead of reporting clean success", async () => {
     const { child } = launchScript(abruptEndScript);
     const source = new ChildCaptureSource(child, 65_536);
     const outcome = await runCaptureSession({
@@ -765,11 +778,30 @@ describe("capture shutdown and protocol integrity", () => {
       clock: fixedClock(0),
       durationMs: 10000,
     });
-    expect(outcome.isOk()).toBe(true);
-    if (outcome.isErr()) {
-      throw new Error("post-end exit must not invalidate acknowledged evidence");
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("post-end exit failure must surface");
     }
-    expect(outcome.value.receivedFrames).toBe(1);
+    expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
+  }, 20000);
+
+  it("requires observed termination when the helper stays alive after its end", async () => {
+    const { child } = launchScript(endThenHangScript);
+    const source = new ChildCaptureSource(child, 65_536);
+    const seen: SourceItem[] = [];
+    for await (const item of source.items(new AbortController().signal)) {
+      seen.push(item);
+      if (item.type === "end") {
+        break;
+      }
+    }
+    expect(seen.some((item) => item.type === "end")).toBe(true);
+    const disposed = await source.dispose();
+    expect(disposed.isErr()).toBe(true);
+    if (disposed.isOk()) {
+      throw new Error("live-after-end helper must not dispose cleanly");
+    }
+    expect(disposed.error.code).toBe("RESOURCE_RELEASE_FAILED");
   }, 20000);
 });
 
