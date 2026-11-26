@@ -2,7 +2,7 @@
   "name": "urbuddy",
   "private": true,
   "type": "module",
-  "description": "urbuddy \u2014 reproducible TypeScript assistant runtime skeleton",
+  "description": "urbuddy — reproducible TypeScript assistant runtime skeleton",
   "version": "0.1.0",
   "packageManager": "pnpm@11.8.0",
   "engines": {
@@ -27,7 +27,9 @@
     "prebuild": "rm -rf dist"
   },
   "dependencies": {
+    "better-sqlite3": "13.2.0",
     "commander": "15.1.0",
+    "drizzle-orm": "0.45.4",
     "env-paths": "4.0.0",
     "ink": "8.0.0",
     "neverthrow": "8.2.0",
@@ -40,6 +42,7 @@
   "devDependencies": {
     "@commitlint/cli": "21.2.4",
     "@commitlint/config-conventional": "21.2.4",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.19.4",
     "@types/react": "19.3.3",
     "@typescript-eslint/parser": "8.74.0",

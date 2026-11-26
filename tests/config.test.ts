@@ -20,6 +20,7 @@ describe("config loader", () => {
       logLevel: "info",
       allowNetworkEgress: false,
       allowChildProcesses: false,
+      allowNativeModules: false,
     });
     expect(Object.isFrozen(result.value)).toBe(true);
   });
@@ -235,7 +236,11 @@ describe("config loader", () => {
         row.configOk,
       );
       const effective = effectivePolicy(
-        { allowNetworkEgress: row.egress, allowChildProcesses: row.child },
+        {
+          allowNetworkEgress: row.egress,
+          allowChildProcesses: row.child,
+          allowNativeModules: false,
+        },
         row.profile,
         "/data",
       );
@@ -307,7 +312,11 @@ describe("security policy", () => {
   });
 
   it("restricted profiles cap grants; development passes them through", () => {
-    const grants = { allowNetworkEgress: true, allowChildProcesses: true };
+    const grants = {
+      allowNetworkEgress: true,
+      allowChildProcesses: true,
+      allowNativeModules: true,
+    };
     const offline = effectivePolicy(grants, "offline", "/data");
     expect(isPermitted(offline, "network-egress")).toBe(false);
     expect(isPermitted(offline, "spawn-child-process")).toBe(false);
@@ -316,7 +325,8 @@ describe("security policy", () => {
     const development = effectivePolicy(grants, "development", "/data");
     expect(isPermitted(development, "network-egress")).toBe(true);
     expect(isPermitted(development, "spawn-child-process")).toBe(true);
-    expect(isPermitted(development, "load-native-module")).toBe(false);
+    expect(isPermitted(development, "load-native-module")).toBe(true);
+    expect(isPermitted(offline, "load-native-module")).toBe(false);
     expect(isPermitted(development, "write-outside-data-root")).toBe(false);
     expect(development.dataRoot).toBe("/data");
   });

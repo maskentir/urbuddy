@@ -9,14 +9,15 @@ export type Profile = (typeof PROFILES)[number];
 export interface ProfileCapabilities {
   readonly allowNetworkEgress: boolean;
   readonly allowChildProcesses: boolean;
+  readonly allowNativeModules: boolean;
 }
 
 export const PROFILE_CAPABILITIES: Readonly<Record<Profile, ProfileCapabilities>> = {
-  offline: { allowNetworkEgress: false, allowChildProcesses: false },
-  evaluation: { allowNetworkEgress: false, allowChildProcesses: false },
-  simulation: { allowNetworkEgress: false, allowChildProcesses: true },
-  development: { allowNetworkEgress: true, allowChildProcesses: true },
-  personal: { allowNetworkEgress: true, allowChildProcesses: true },
+  offline: { allowNetworkEgress: false, allowChildProcesses: false, allowNativeModules: false },
+  evaluation: { allowNetworkEgress: false, allowChildProcesses: false, allowNativeModules: false },
+  simulation: { allowNetworkEgress: false, allowChildProcesses: true, allowNativeModules: false },
+  development: { allowNetworkEgress: true, allowChildProcesses: true, allowNativeModules: true },
+  personal: { allowNetworkEgress: true, allowChildProcesses: true, allowNativeModules: true },
 };
 
 const sessionConfigSchema = z.object({
@@ -26,6 +27,7 @@ const sessionConfigSchema = z.object({
   logLevel: logLevelSchema,
   allowNetworkEgress: z.boolean(),
   allowChildProcesses: z.boolean(),
+  allowNativeModules: z.boolean(),
 });
 
 export type SessionConfig = z.infer<typeof sessionConfigSchema>;
@@ -37,6 +39,7 @@ const DEFAULTS: SessionConfig = {
   logLevel: "info",
   allowNetworkEgress: false,
   allowChildProcesses: false,
+  allowNativeModules: false,
 };
 
 export interface ConfigFlags {
@@ -45,6 +48,7 @@ export interface ConfigFlags {
   readonly dataRoot?: string;
   readonly allowNetworkEgress?: boolean;
   readonly allowChildProcesses?: boolean;
+  readonly allowNativeModules?: boolean;
 }
 
 export interface ConfigInput {
@@ -82,6 +86,10 @@ export function loadSessionConfig(
   if (childEnv.isErr()) {
     return err(childEnv.error);
   }
+  const nativeEnv = parseEnvBoolean(env["URBUDDY_ALLOW_NATIVE"], "URBUDDY_ALLOW_NATIVE");
+  if (nativeEnv.isErr()) {
+    return err(nativeEnv.error);
+  }
 
   const draft: {
     profile: string;
@@ -90,12 +98,14 @@ export function loadSessionConfig(
     logLevel: string;
     allowNetworkEgress: boolean;
     allowChildProcesses: boolean;
+    allowNativeModules: boolean;
   } = {
     profile: DEFAULTS.profile,
     appName: DEFAULTS.appName,
     logLevel: DEFAULTS.logLevel,
     allowNetworkEgress: DEFAULTS.allowNetworkEgress,
     allowChildProcesses: DEFAULTS.allowChildProcesses,
+    allowNativeModules: DEFAULTS.allowNativeModules,
   };
 
   const envProfile = env["URBUDDY_PROFILE"];
@@ -116,6 +126,9 @@ export function loadSessionConfig(
   if (childEnv.value !== undefined) {
     draft.allowChildProcesses = childEnv.value;
   }
+  if (nativeEnv.value !== undefined) {
+    draft.allowNativeModules = nativeEnv.value;
+  }
 
   if (flags.profile !== undefined) {
     draft.profile = flags.profile;
@@ -131,6 +144,9 @@ export function loadSessionConfig(
   }
   if (flags.allowChildProcesses !== undefined) {
     draft.allowChildProcesses = flags.allowChildProcesses;
+  }
+  if (flags.allowNativeModules !== undefined) {
+    draft.allowNativeModules = flags.allowNativeModules;
   }
 
   const parsed = sessionConfigSchema.safeParse(draft);
@@ -159,6 +175,11 @@ function applyProfileGuards(config: SessionConfig): Result<SessionConfig, AppErr
   if (config.allowChildProcesses && !ceiling.allowChildProcesses) {
     return err(
       appError("CONFIG_INVALID", `profile '${config.profile}' cannot grant child processes`),
+    );
+  }
+  if (config.allowNativeModules && !ceiling.allowNativeModules) {
+    return err(
+      appError("CONFIG_INVALID", `profile '${config.profile}' cannot grant native modules`),
     );
   }
   return ok(config);

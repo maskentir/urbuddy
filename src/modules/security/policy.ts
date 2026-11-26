@@ -32,7 +32,7 @@ export function effectivePolicy(
   return {
     allowNetworkEgress: grants.allowNetworkEgress && ceiling.allowNetworkEgress,
     allowChildProcesses: grants.allowChildProcesses && ceiling.allowChildProcesses,
-    allowNativeModules: false,
+    allowNativeModules: grants.allowNativeModules && ceiling.allowNativeModules,
     dataRoot,
   };
 }
