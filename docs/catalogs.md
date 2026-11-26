@@ -6,14 +6,16 @@ review-blocking defect.
 
 ## Commands (`src/kernel/commands.ts`)
 
-| name              | enforced by                                          |
-| ----------------- | ---------------------------------------------------- |
-| `doctor [--json]` | `parseCommandRequest` + commander action in `cli.ts` |
-| `version`         | commander action in `cli.ts`                         |
+| name              | enforced by                  |
+| ----------------- | ---------------------------- |
+| `doctor [--json]` | commander action in `cli.ts` |
+| `version`         | commander action in `cli.ts` |
 
-`help` is provided by commander itself and is intentionally outside the
-typed catalog. Dispatch matches on the `CommandName` union exhaustively via
-ts-pattern: a new name without a handler is a compile error.
+Commander owns argument parsing. The typed catalog holds the command
+names (`COMMAND_NAMES`) and their help text (`commandHelp`); both
+command registrations consume it, so a catalog entry without a
+handler is a visible defect. `help` is provided by commander itself
+and is intentionally outside the typed catalog.
 
 ## Exit codes (`src/kernel/exit-codes.ts`)
 

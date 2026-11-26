@@ -1,9 +1,13 @@
 # urbuddy
 
-Reproducible assistant runtime skeleton. Typed errors, injectable
-identity/time, pure config, resource lifecycle, default-deny security,
-and a tiny CLI with an Ink smoke path. See [AGENTS.md](./AGENTS.md) for
-the working conventions.
+Personal language intelligence for non-native English-speaking
+professionals: follow live meetings in real time, get contextual
+English–Indonesian comprehension help, and turn daily conversations
+into lasting language progress — with data under the user's control.
+See [docs/product.md](./docs/product.md) for the vision,
+[docs/roadmap.md](./docs/roadmap.md) for the delivery sequence, and
+[docs/architecture.md](./docs/architecture.md) for the system design.
+Working conventions live in [AGENTS.md](./AGENTS.md).
 
 ## Requirements
 

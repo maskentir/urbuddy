@@ -6,6 +6,16 @@ Urbuddy is a local-first personal language intelligence application built for re
 
 Maintain production-grade engineering standards without introducing unnecessary complexity.
 
+## Project context — read first
+
+Before proposing changes, read in this order:
+`docs/product.md`, `docs/roadmap.md`, `docs/architecture.md`, then the
+accepted records in `docs/decisions/`. `README.md` introduces the
+product; this file defines the working conventions. Do not depend on
+prior chat history: the repository is the source of truth for product
+direction and engineering decisions. Update canonical documents only
+when a material product or architecture decision changes.
+
 ## Engineering principles
 
 - Prefer the simplest correct implementation.
