@@ -160,10 +160,8 @@ describe("cli commands", () => {
 });
 
 describe("ink smoke", () => {
-  it("builds the startup message and passes dry runs", async () => {
+  it("builds the startup message", () => {
     expect(startupMessageText("0.0.0", "s-1")).toBe("urbuddy 0.0.0 ready (session s-1)");
-    const result = await runInkSmoke({ version: "0.0.0", sessionId: "s-1", dryRun: true });
-    expect(result.isOk()).toBe(true);
   });
 
   it("refuses to start on an already-aborted signal", async () => {
@@ -223,7 +221,7 @@ describe("composition", () => {
       },
     });
     expect(registered.isOk()).toBe(true);
-    const stopped = await stopApp(created, { exitCode: EXIT_CODES.success });
+    const stopped = await stopApp(created);
     expect(stopped.error).toBeUndefined();
     expect(released).toBe(true);
   });

@@ -111,16 +111,11 @@ export function startApp(app: AppContainer): void {
   app.logger.info("app started", { profile: app.config.profile, version: URBUDDY_VERSION });
 }
 
-export interface StopAppOptions {
-  readonly exitCode: ExitCode;
-  readonly signal?: AbortSignal;
-}
-
 export async function stopApp(
   app: AppContainer,
-  options: StopAppOptions,
+  signal?: AbortSignal,
 ): Promise<{ error?: AppError }> {
-  const disposed = await app.scope.disposeAll(options.signal);
+  const disposed = await app.scope.disposeAll(signal);
   if (disposed.isErr()) {
     return { error: disposed.error };
   }
@@ -160,7 +155,7 @@ export async function runApp(
       const cleanup = new AbortController();
       const deadline = setTimeout(() => cleanup.abort(), SHUTDOWN_GRACE_MS);
       try {
-        const stopped = await stopApp(app, { exitCode: code, signal: cleanup.signal });
+        const stopped = await stopApp(app, cleanup.signal);
         if (stopped.error !== undefined) {
           app.logger.error(formatError(stopped.error));
           if (code === EXIT_CODES.success) {

@@ -1,4 +1,8 @@
-import { PROFILE_CAPABILITIES, type Profile, type ProfileCapabilities } from "../config/loader.js";
+import {
+  PROFILE_CAPABILITIES,
+  type Profile,
+  type ProfileCapabilities,
+} from "@modules/config/loader";
 
 export interface SecurityPolicy {
   readonly allowNetworkEgress: boolean;
@@ -10,11 +14,6 @@ export interface SecurityPolicy {
 export type SensitiveAction =
   "network-egress" | "spawn-child-process" | "load-native-module" | "write-outside-data-root";
 
-export interface CapabilityGrants {
-  readonly allowNetworkEgress: boolean;
-  readonly allowChildProcesses: boolean;
-}
-
 export function defaultDenyPolicy(dataRoot: string): SecurityPolicy {
   return {
     allowNetworkEgress: false,
@@ -25,21 +24,17 @@ export function defaultDenyPolicy(dataRoot: string): SecurityPolicy {
 }
 
 export function effectivePolicy(
-  grants: CapabilityGrants,
+  grants: ProfileCapabilities,
   profile: Profile,
   dataRoot: string,
 ): SecurityPolicy {
-  const ceiling = profileCeiling(profile);
+  const ceiling = PROFILE_CAPABILITIES[profile];
   return {
     allowNetworkEgress: grants.allowNetworkEgress && ceiling.allowNetworkEgress,
     allowChildProcesses: grants.allowChildProcesses && ceiling.allowChildProcesses,
     allowNativeModules: false,
     dataRoot,
   };
-}
-
-function profileCeiling(profile: Profile): ProfileCapabilities {
-  return PROFILE_CAPABILITIES[profile];
 }
 
 export function isPermitted(policy: SecurityPolicy, action: SensitiveAction): boolean {

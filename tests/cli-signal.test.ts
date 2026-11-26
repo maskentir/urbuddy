@@ -54,6 +54,32 @@ async function runUntilSignalled(
   }
 }
 
+async function runToCompletion(): Promise<{ code: number | null; output: string }> {
+  let output = "";
+  const child = spawn(process.execPath, [tsxCli, entry, "--ink-smoke", "--ink-dwell-ms", "50"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk: unknown) => {
+    output += String(chunk);
+  });
+  child.stderr.on("data", (chunk: unknown) => {
+    output += String(chunk);
+  });
+  try {
+    const [code] = (await Promise.race([
+      once(child, "exit"),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("timed out waiting for exit")), 15000);
+      }),
+    ])) as [number | null];
+    return { code, output };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+}
+
 describe("shutdown signals", () => {
   it.each(["SIGINT", "SIGTERM"] as const)(
     "exits cancelled on %s during a run",
@@ -64,4 +90,10 @@ describe("shutdown signals", () => {
     },
     60000,
   );
+
+  it("completes the smoke path with exit zero", async () => {
+    const { code, output } = await runToCompletion();
+    expect(code).toBe(0);
+    expect(output).toContain("ink smoke ok");
+  }, 60000);
 });

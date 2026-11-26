@@ -56,6 +56,21 @@ export default {
       from: { path: "^src/presentation" },
       to: { path: "^src/bootstrap" },
     },
+    {
+      name: "adapters-boundary",
+      severity: "error",
+      comment:
+        "Adapters translate vendor APIs into kernel contracts; they never import domain, UI, or composition layers.",
+      from: { path: "^src/adapters" },
+      to: { path: "^(src/modules|src/presentation|src/bootstrap)" },
+    },
+    {
+      name: "adapters-owned-by-bootstrap",
+      severity: "error",
+      comment: "Only the composition root wires adapters; no other layer reaches past them.",
+      from: { path: "^(src/kernel|src/modules|src/platform|src/presentation)" },
+      to: { path: "^src/adapters" },
+    },
   ],
   options: {
     doNotFollow: { path: "node_modules" },

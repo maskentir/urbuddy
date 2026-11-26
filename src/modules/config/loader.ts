@@ -68,10 +68,6 @@ function parseEnvBoolean(
   return err(appError("CONFIG_INVALID", `env ${name} must be one of 1/0/true/false`));
 }
 
-function freeze<T extends object>(value: T): Readonly<T> {
-  return Object.freeze(value);
-}
-
 export function loadSessionConfig(
   input: ConfigInput = {},
 ): Result<ImmutableSessionConfig, AppError> {
@@ -150,7 +146,7 @@ export function loadSessionConfig(
   if (guard.isErr()) {
     return err(guard.error);
   }
-  return ok(freeze(guard.value));
+  return ok(Object.freeze(guard.value));
 }
 
 function applyProfileGuards(config: SessionConfig): Result<SessionConfig, AppError> {

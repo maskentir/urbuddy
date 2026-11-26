@@ -1,5 +1,5 @@
-import { commandHelp, parseCommandRequest, type CommandName } from "@kernel/commands";
-import { formatError, toAppError, type AppError, type ErrorCode } from "@kernel/errors";
+import { commandHelp } from "@kernel/commands";
+import { toAppError, type AppError, type ErrorCode } from "@kernel/errors";
 import { EXIT_CODES, type ExitCode } from "@kernel/exit-codes";
 import type { CorrelationId, SessionId } from "@kernel/ids";
 import type { ConfigFlags, ImmutableSessionConfig } from "@modules/config/loader";
@@ -191,7 +191,7 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
 
   program
     .command("version")
-    .description("print the urbuddy build version")
+    .description(commandHelp("version"))
     .action(() => {
       output.out(`urbuddy ${deps.version}`);
     });
@@ -201,12 +201,8 @@ export function createProgram(deps: CliDeps, output: CliOutput = defaultOutput()
     .description(commandHelp("doctor"))
     .option("--json", "emit the report as stable JSON", false)
     .action((options: { json: boolean }) => {
-      const parsed = parseCommandRequest({ name: "doctor" as CommandName, json: options.json });
-      if (parsed.isErr()) {
-        throw new Error(formatError(parsed.error));
-      }
       const report = buildDoctorReport(deps);
-      if (parsed.value.json) {
+      if (options.json) {
         output.out(toStableJson(report));
       } else {
         output.out(formatDoctorText(report));
