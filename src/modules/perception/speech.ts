@@ -1,7 +1,7 @@
 import { appError, toAppError, type AppError } from "@kernel/errors";
 import { err, ok, type Result } from "neverthrow";
 
-import type { CaptureSource } from "./audio.js";
+import { SourceValidator, type CaptureSource } from "./audio.js";
 import { AudioConverter, type PcmEncoding } from "./convert.js";
 
 export type SpeechMode = "endpointing" | "diarization";
@@ -31,6 +31,7 @@ export type SpeechProviderEvent =
 
 export interface SpeechSession {
   readonly encoding: PcmEncoding;
+  readonly providerSessionId: string | undefined;
   events(): AsyncIterable<SpeechProviderEvent>;
   sendAudio(pcm: Buffer): Promise<Result<void, AppError>>;
   endInput(): Promise<void>;
@@ -39,6 +40,7 @@ export interface SpeechSession {
 
 export interface OpenSpeechSessionOptions {
   readonly mode: SpeechMode;
+  readonly encoding: PcmEncoding;
   readonly keywords: readonly string[];
   readonly signal: AbortSignal;
 }
@@ -111,6 +113,7 @@ export class TranscriptReducer {
   apply(event: SpeechProviderEvent): Result<TranscriptEvent | undefined, AppError> {
     switch (event.type) {
       case "connectionEpoch": {
+        const abandoned = [...this.turns.values()].filter((turn) => !turn.finalized).length;
         this.epoch = event.epoch;
         this.turns.clear();
         this.currentTurnRef = undefined;
@@ -120,7 +123,10 @@ export class TranscriptReducer {
         return ok({
           type: "discontinuity",
           reason: event.uncertainMs > 0 ? "uncertain-coverage" : "reconnect",
-          detail: `provider connection epoch ${event.epoch} started; ${event.uncertainMs} ms of transmitted audio has uncertain processing coverage`,
+          detail:
+            `provider connection epoch ${event.epoch} started; ` +
+            `${event.uncertainMs} ms of transmitted audio has uncertain processing coverage` +
+            (abandoned === 0 ? "" : `; ${abandoned} unresolved turn(s) abandoned`),
         });
       }
       case "turnStarted": {
@@ -203,6 +209,26 @@ export class TranscriptReducer {
     }
   }
 
+  close(): TranscriptEvent[] {
+    const unresolved: TranscriptEvent[] = [];
+    for (const turn of this.turns.values()) {
+      if (!turn.finalized) {
+        unresolved.push({
+          type: "discontinuity",
+          reason: "uncertain-coverage",
+          detail:
+            `utterance ${turn.utteranceId} never finalized; ` +
+            (turn.text.length === 0
+              ? "no transcript text was received"
+              : `last partial "${turn.text.slice(0, 120)}" is not final coverage`),
+        });
+      }
+    }
+    this.turns.clear();
+    this.currentTurnRef = undefined;
+    return unresolved;
+  }
+
   private currentTurn(): TurnState | undefined {
     if (this.currentTurnRef === undefined) {
       return undefined;
@@ -272,75 +298,72 @@ async function awaitOutput<T>(work: Promise<T>, signal: AbortSignal): Promise<T>
   });
 }
 
+async function emitDiscontinuity(
+  input: TranscriptionInput,
+  reason: "capture-gap" | "reconnect" | "uncertain-coverage",
+  detail: string,
+): Promise<void> {
+  await awaitOutput(input.onEvent({ type: "discontinuity", reason, detail }), input.signal);
+}
+
 export async function runTranscription(
   input: TranscriptionInput,
 ): Promise<Result<TranscriptionSummary, AppError>> {
-  const opened = await input.provider.openSession({
-    mode: input.mode,
-    keywords: input.keywords,
-    signal: input.signal,
-  });
-  if (opened.isErr()) {
-    const disposed = await input.source.dispose();
-    if (disposed.isErr()) {
-      return err(opened.error);
-    }
-    return err(opened.error);
+  if (
+    input.durationMs !== undefined &&
+    (!Number.isInteger(input.durationMs) || input.durationMs < 1_000 || input.durationMs > 300_000)
+  ) {
+    await input.source.dispose().catch(() => undefined);
+    return err(appError("VALIDATION_FAILED", "transcription duration must be 1 to 300 seconds"));
   }
-  const session = opened.value;
-  if (input.durationMs !== undefined) {
-    if (
-      !Number.isInteger(input.durationMs) ||
-      input.durationMs < 1_000 ||
-      input.durationMs > 300_000
-    ) {
-      await session.terminate().catch(() => undefined);
-      await input.source.dispose().catch(() => undefined);
-      return err(appError("VALIDATION_FAILED", "transcription duration must be 1 to 300 seconds"));
+  const startedAt = Date.now();
+  let firstPartialMs: number | undefined;
+  let discontinuities = 0;
+  const reducer = new TranscriptReducer();
+  const validator = new SourceValidator();
+  let failure: AppError | undefined;
+  let session: SpeechSession | undefined;
+  let converter: AudioConverter | undefined;
+  let consumeEvents: Promise<void> = Promise.resolve();
+
+  const observe = async (event: TranscriptEvent): Promise<void> => {
+    if (event.type === "discontinuity") {
+      discontinuities += 1;
     }
-  }
+    if (event.type === "partial" && firstPartialMs === undefined) {
+      firstPartialMs = Date.now() - startedAt;
+    }
+    await awaitOutput(input.onEvent(event), input.signal);
+  };
+
+  const startConsumer = (active: SpeechSession): void => {
+    consumeEvents = (async (): Promise<void> => {
+      try {
+        for await (const providerEvent of active.events()) {
+          if (input.signal.aborted) {
+            throw appError("CANCELLED", "transcription cancelled");
+          }
+          const applied = reducer.apply(providerEvent);
+          if (applied.isErr()) {
+            throw applied.error;
+          }
+          if (applied.value !== undefined) {
+            await observe(applied.value);
+          }
+        }
+      } catch (thrown: unknown) {
+        failure ??= toAppError(thrown, "transcription event consumption failed");
+      }
+    })();
+  };
+
   const durationTimer =
     input.durationMs === undefined
       ? undefined
       : setTimeout(() => {
           void input.source.stop().catch(() => undefined);
         }, input.durationMs);
-  const startedAt = Date.now();
-  let firstPartialMs: number | undefined;
-  let discontinuities = 0;
-  const reducer = new TranscriptReducer();
-  let failure: AppError | undefined;
-  let converter: AudioConverter | undefined;
-  let expectedSample = 0;
-
-  const consumeEvents = (async (): Promise<void> => {
-    try {
-      for await (const providerEvent of session.events()) {
-        if (input.signal.aborted) {
-          throw appError("CANCELLED", "transcription cancelled");
-        }
-        const applied = reducer.apply(providerEvent);
-        if (applied.isErr()) {
-          throw applied.error;
-        }
-        if (applied.value === undefined) {
-          continue;
-        }
-        if (applied.value.type === "discontinuity") {
-          discontinuities += 1;
-        }
-        if (applied.value.type === "partial" && firstPartialMs === undefined) {
-          firstPartialMs = Date.now() - startedAt;
-        }
-        await awaitOutput(input.onEvent(applied.value), input.signal);
-      }
-    } catch (thrown: unknown) {
-      failure ??= toAppError(thrown, "transcription event consumption failed");
-    }
-  })();
-
   try {
-    let sawFormat = false;
     let sawEnd = false;
     for await (const item of input.source.items(input.signal)) {
       if (input.signal.aborted) {
@@ -350,30 +373,55 @@ export async function runTranscription(
         throw failure;
       }
       if (item.type === "format") {
-        if (sawFormat) {
-          throw appError("VALIDATION_FAILED", "audio source produced more than one format");
+        const accepted = validator.feedFormat(item.seq, item.format);
+        if (accepted.isErr()) {
+          throw accepted.error;
         }
-        sawFormat = true;
-        const created = AudioConverter.create(item.format);
+        const created = AudioConverter.create(accepted.value);
         if (created.isErr()) {
           throw created.error;
         }
         converter = created.value;
-        if (converter.outputEncoding !== session.encoding) {
+        const opened = await input.provider.openSession({
+          mode: input.mode,
+          encoding: converter.outputEncoding,
+          keywords: input.keywords,
+          signal: input.signal,
+        });
+        if (opened.isErr()) {
+          throw opened.error;
+        }
+        session = opened.value;
+        if (session.encoding !== converter.outputEncoding) {
           throw appError(
             "VALIDATION_FAILED",
             "audio conversion does not match the provider session encoding",
           );
         }
+        startConsumer(session);
         if (input.onFormat !== undefined) {
-          await awaitOutput(input.onFormat(item.format), input.signal);
+          await awaitOutput(input.onFormat(accepted.value), input.signal);
         }
         continue;
       }
-      if (!sawFormat || converter === undefined) {
+      if (converter === undefined || session === undefined) {
         throw appError("VALIDATION_FAILED", "audio source produced audio before its format");
       }
       if (item.type === "end") {
+        const accepted = validator.feedEnd(item.seq, item.end);
+        if (accepted.isErr()) {
+          throw accepted.error;
+        }
+        if (accepted.value.tailGap !== undefined) {
+          const gap = accepted.value.tailGap;
+          discontinuities += 1;
+          converter.noteGap();
+          await emitDiscontinuity(
+            input,
+            "capture-gap",
+            `capture tail gap from sample ${gap.fromSample} to ${gap.toSample}; missing audio is not synthesized`,
+          );
+        }
         sawEnd = true;
         const flushed = converter.flush();
         if (flushed.pcm.length > 0) {
@@ -384,22 +432,20 @@ export async function runTranscription(
         }
         break;
       }
-      if (item.chunk.startSample > expectedSample) {
+      const accepted = validator.feedAudio(item.chunk);
+      if (accepted.isErr()) {
+        throw accepted.error;
+      }
+      if (accepted.value.gap !== undefined) {
+        const gap = accepted.value.gap;
         converter.noteGap();
         discontinuities += 1;
-        await awaitOutput(
-          input.onEvent({
-            type: "discontinuity",
-            reason: "capture-gap",
-            detail: `capture gap from sample ${expectedSample} to ${item.chunk.startSample}; missing audio is not synthesized`,
-          }),
-          input.signal,
+        await emitDiscontinuity(
+          input,
+          "capture-gap",
+          `capture gap from sample ${gap.fromSample} to ${gap.toSample}; missing audio is not synthesized`,
         );
-        expectedSample = item.chunk.startSample;
-      } else if (item.chunk.startSample < expectedSample) {
-        throw appError("VALIDATION_FAILED", "audio source overlaps already received samples");
       }
-      expectedSample += item.chunk.samples.length / converter.format.channels;
       const converted = converter.convert(item.chunk.samples);
       if (converted.isErr()) {
         throw converted.error;
@@ -414,21 +460,29 @@ export async function runTranscription(
     if (!sawEnd) {
       throw appError("VALIDATION_FAILED", "audio source ended without helper acknowledgement");
     }
+    if (session === undefined) {
+      throw appError("VALIDATION_FAILED", "audio source produced no audio format");
+    }
     if (durationTimer !== undefined) {
       clearTimeout(durationTimer);
     }
     await session.endInput();
     await consumeEvents;
     if (failure !== undefined) {
-      return err(failure);
+      throw failure;
     }
     if (input.signal.aborted) {
-      return err(appError("CANCELLED", "transcription cancelled"));
+      throw appError("CANCELLED", "transcription cancelled");
+    }
+    for (const unresolved of reducer.close()) {
+      await observe(unresolved);
     }
     const disposed = await input.source.dispose();
     if (disposed.isErr()) {
+      await session.terminate().catch(() => undefined);
       return err(disposed.error);
     }
+    await session.terminate().catch(() => undefined);
     const stats = converter?.stats ?? { inputFrames: 0, outputFrames: 0 };
     return ok({
       providerId: input.provider.providerId,
@@ -440,13 +494,19 @@ export async function runTranscription(
       inputFrames: stats.inputFrames,
       outputFrames: stats.outputFrames,
       ...(firstPartialMs === undefined ? {} : { firstPartialMs }),
+      ...(session.providerSessionId === undefined
+        ? {}
+        : { providerSessionId: session.providerSessionId }),
     });
   } catch (thrown: unknown) {
     if (durationTimer !== undefined) {
       clearTimeout(durationTimer);
     }
     const primary = failure ?? toAppError(thrown, "transcription failed");
-    await session.terminate().catch(() => undefined);
+    await input.source.stop().catch(() => undefined);
+    if (session !== undefined) {
+      await session.terminate().catch(() => undefined);
+    }
     await consumeEvents.catch(() => undefined);
     await input.source.dispose().catch(() => undefined);
     return err(primary);

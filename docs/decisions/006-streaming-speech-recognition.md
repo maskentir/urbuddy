@@ -69,35 +69,70 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   clipping counts. 24 kHz passes through; 16 kHz uses `PCM_16KHZ`
   and avoids upsampling. Other rates are rejected instead of being
   decimated naively. Converter state resets on a capture gap; missing
-  audio is never bridged or padded with unrelated samples. An
+  audio is never bridged or padded with unrelated samples. The
+  provider session opens lazily after the source format arrives, so
+  the handshake encoding always matches the converter output. An
   Apple-side converter was rejected for this slice: it would split
   format ownership into the Swift helper while the helper contract
   (validated Float32 frames) already works.
+- Continuity validation is shared, not duplicated: `SourceValidator`
+  in `perception/audio.ts` enforces format/audio/end sequencing,
+  overlap rejection, delivery counters, and tail-gap accounting for
+  both `runCaptureSession` and `runTranscription`.
 - Transport uses `ws` 8.23.0 (MIT, Node >= 10). Native Node
   WebSocket was evaluated and rejected: it provides no inbound
   payload bound, no termination control suitable for the lifecycle
   tests, and no server implementation for deterministic local
-  protocol tests. The adapter enforces an inbound message bound,
-  a bounded outbound buffer (default 262,144 bytes, about five
-  seconds at 24 kHz), handshake and drain deadlines, and actual
-  socket termination. Sending never claims provider processing;
-  `audioProcessedMs` progress is the only processing evidence.
+  protocol tests. The adapter enforces an inbound message bound
+  plus a 1,024-event queue bound, a bounded outbound buffer
+  (default 262,144 bytes, about five seconds at 24 kHz), handshake
+  and drain deadlines, and actual socket termination. Sending never
+  claims provider processing; `audioProcessedMs` progress is the
+  only processing evidence. A send callback only frees kernel
+  buffer space; the adapter races it against session termination so
+  a stalled callback cannot leak the operation.
+- Handshake acknowledgement is per epoch: audio and `endStream`
+  wait for the acked socket, never for mere TCP/TLS readiness. The
+  acknowledgement schema is strict, so an error frame carrying a
+  `sessionId` cannot satisfy it. Termination and explicit shutdown
+  never create new connections; stale sockets are ignored by
+  identity; reconnect backoff is owned by the session and
+  cancellable.
 - Reconnect is bounded (default two attempts, backoff 250 ms then
   1 s, one retry owner in the adapter) and limited to transient
-  (`1011`) and rate-limit (`1013`) closes. Protocol rejections
-  (`1008`) and authentication failures are never retried. A new
-  epoch emits an explicit discontinuity; transmitted audio whose
-  processing was never confirmed is reported as uncertain coverage
-  in milliseconds. Nothing is blindly resent and exactly-once
-  recognition is not claimed.
+  (`1011`) and rate-limit (`1013`) closes, including after
+  end-of-input. Protocol rejections (`1008`) and authentication
+  failures are never retried. A reconnect resends only the
+  unacknowledged tail from a bounded 4 MiB buffer, paced in
+  real-time 80 ms frames; if the buffer no longer covers the
+  unprocessed range the session fails closed instead of presenting
+  an empty replacement connection. Every new epoch emits an
+  explicit discontinuity with uncertain-coverage milliseconds and
+  abandoned-turn accounting. Exactly-once recognition is not
+  claimed. Unresolved turns at normal closure are reported as
+  uncertain coverage, never promoted to final.
+- WAV input never trusts the declared extent: headers are scanned
+  incrementally with a 1 MiB bound, the declared data range is
+  validated against the actual file size, data is read through the
+  single owned handle, and a short read fails the operation.
+  Regular-file gating uses nonblocking acquisition, so a FIFO
+  without a writer is rejected instead of hanging. Realtime pacing
+  enforces a minimum half-chunk interval so catch-up bursts cannot
+  exceed twice the source rate.
 - Credentials arrive only through the `MODEL_API_KEY` environment
-  variable, never through arguments, URLs, logs, or fixtures. The
-  endpoint override `URBUDDY_MUSE_ENDPOINT` exists for deterministic
-  local test servers and still requires egress authorization.
-  Live system audio additionally requires child-process
-  authorization, and the CLI discloses before capture that
-  system-wide audio goes to the cloud provider. Transcripts and
-  audio stay ephemeral; no persistence is introduced.
+  variable, never through arguments, URLs, logs, or fixtures.
+  Production connections are restricted to `wss://api.meta.ai`;
+  loopback `ws://127.0.0.1`/`localhost` is accepted only through
+  the explicit test-only `testLoopbackEndpoint` dependency, never
+  through configuration. There is no endpoint override in
+  production wiring. Live system audio additionally requires
+  child-process authorization, and the CLI discloses cloud
+  transmission on stderr in both text and JSON modes. Transcripts
+  and audio stay ephemeral; no persistence is introduced.
+- Speaker attribution keeps the most recent label per turn as an
+  approximation of the documented span semantics (the label covers
+  the span since the previous speech event); multi-label turn
+  internals are not yet modeled.
 
 ## Consequences
 

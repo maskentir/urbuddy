@@ -94,13 +94,11 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
         }
         source = opened.value;
       } else {
-        if (!input.json) {
-          await input.output.out(
-            stripFormatting(
-              "disclosure: system-wide macOS audio will be sent to the selected cloud speech provider (Meta Muse). No audio is stored by urbuddy.",
-            ),
-          );
-        }
+        await input.output.errLine(
+          stripFormatting(
+            "disclosure: system-wide macOS audio will be sent to the selected cloud speech provider (Meta Muse). No audio is stored by urbuddy.",
+          ),
+        );
         const spawned = (deps.spawnCapture as NonNullable<TranscribeDeps["spawnCapture"]>)({});
         if (spawned.isErr()) {
           return err(spawned.error);

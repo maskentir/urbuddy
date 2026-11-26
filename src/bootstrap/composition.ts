@@ -140,13 +140,7 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
                   ),
                 );
               }
-              const endpoint = env["URBUDDY_MUSE_ENDPOINT"];
-              return ok(
-                createMuseProvider({
-                  apiKey,
-                  ...(endpoint === undefined || endpoint === "" ? {} : { endpoint }),
-                }),
-              );
+              return ok(createMuseProvider({ apiKey }));
             },
             openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
           }

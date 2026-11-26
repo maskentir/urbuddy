@@ -161,7 +161,7 @@ describe("Muse transport (local server)", () => {
     server = new TestServer(happyScript());
     const provider = createMuseProvider({
       apiKey: "test-key",
-      endpoint: await server.url(),
+      testLoopbackEndpoint: await server.url(),
       reconnectBackoffMs: [10],
     });
     const events: TranscriptEvent[] = [];
@@ -179,6 +179,7 @@ describe("Muse transport (local server)", () => {
     if (outcome.isOk()) {
       expect(outcome.value.finals).toBe(1);
       expect(outcome.value.modelId).toBe("muse-voice-transcribe-1.0");
+      expect(outcome.value.providerSessionId).toBe("test-session-1");
     }
     expect(events.some((e) => e.type === "final" && e.text === "Hello world.")).toBe(true);
     expect(server.receivedText[0]).toContain("authorization");
@@ -193,9 +194,13 @@ describe("Muse transport (local server)", () => {
         socket.once("message", () => socket.send(JSON.stringify({ nope: true })));
       },
     });
-    const provider = createMuseProvider({ apiKey: "test-key", endpoint: await server.url() });
+    const provider = createMuseProvider({
+      apiKey: "test-key",
+      testLoopbackEndpoint: await server.url(),
+    });
     const opened = await provider.openSession({
       mode: "endpointing",
+      encoding: "PCM_24KHZ",
       keywords: [],
       signal: new AbortController().signal,
     });
@@ -211,11 +216,12 @@ describe("Muse transport (local server)", () => {
     });
     const provider = createMuseProvider({
       apiKey: "bad-key",
-      endpoint: await server.url(),
+      testLoopbackEndpoint: await server.url(),
       reconnectBackoffMs: [10],
     });
     const opened = await provider.openSession({
       mode: "endpointing",
+      encoding: "PCM_24KHZ",
       keywords: [],
       signal: new AbortController().signal,
     });
@@ -236,7 +242,10 @@ describe("Muse transport (local server)", () => {
         );
       }),
     );
-    const provider = createMuseProvider({ apiKey: "test-key", endpoint: await server.url() });
+    const provider = createMuseProvider({
+      apiKey: "test-key",
+      testLoopbackEndpoint: await server.url(),
+    });
     const outcome = await runTranscription({
       source: fakeSource(),
       provider,
@@ -266,7 +275,10 @@ describe("Muse transport (local server)", () => {
         });
       },
     });
-    const provider = createMuseProvider({ apiKey: "test-key", endpoint: await server.url() });
+    const provider = createMuseProvider({
+      apiKey: "test-key",
+      testLoopbackEndpoint: await server.url(),
+    });
     const outcome = await runTranscription({
       source: fakeSource(),
       provider,
@@ -307,7 +319,7 @@ describe("Muse transport (local server)", () => {
     });
     const provider = createMuseProvider({
       apiKey: "test-key",
-      endpoint: await server.url(),
+      testLoopbackEndpoint: await server.url(),
       reconnectBackoffMs: [10],
       maxReconnects: 2,
     });
@@ -329,9 +341,10 @@ describe("Muse transport (local server)", () => {
 
   it("requires a credential before connecting", async () => {
     server = new TestServer(happyScript());
-    const provider = createMuseProvider({ apiKey: "  ", endpoint: await server.url() });
+    const provider = createMuseProvider({ apiKey: "  ", testLoopbackEndpoint: await server.url() });
     const opened = await provider.openSession({
       mode: "endpointing",
+      encoding: "PCM_24KHZ",
       keywords: [],
       signal: new AbortController().signal,
     });

@@ -1,6 +1,7 @@
+import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 
-import { appError, type AppError } from "@kernel/errors";
+import { appError, isAppError, type AppError } from "@kernel/errors";
 import type { CaptureSource, SourceItem } from "@modules/perception/audio";
 import { err, ok, type Result } from "neverthrow";
 
@@ -17,68 +18,132 @@ export interface OpenWavOptions {
 }
 
 const DEFAULT_CHUNK_FRAMES = 1_920;
+const MAX_CHUNK_FRAMES = 96_000;
+const HEADER_SCAN_BOUND = 1_048_576;
+const READ_BLOCK = 65_536;
 
-function parseWavHeader(
-  buffer: Buffer,
-): Result<{ info: WavInfo; dataOffset: number; dataBytes: number }, AppError> {
+interface LocatedWav {
+  readonly info: WavInfo;
+  readonly dataOffset: number;
+  readonly dataBytes: number;
+}
+
+async function readAt(
+  handle: FileHandle,
+  length: number,
+  position: number,
+): Promise<{ bytes: Buffer; eof: boolean }> {
+  const buffer = Buffer.alloc(length);
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, length, position);
+    return { bytes: buffer.subarray(0, bytesRead), eof: bytesRead < length };
+  } catch (thrown: unknown) {
+    const code = (thrown as { code?: unknown }).code;
+    if (code === "EAGAIN") {
+      throw appError("VALIDATION_FAILED", "WAV input is not readable without blocking");
+    }
+    throw thrown;
+  }
+}
+
+async function locateWav(
+  handle: FileHandle,
+  fileSize: number,
+): Promise<Result<LocatedWav, AppError>> {
+  let buffered = Buffer.alloc(0);
+  let fileOffset = 0;
+  const fill = async (needed: number): Promise<Result<Buffer, AppError>> => {
+    while (buffered.length < needed) {
+      if (fileOffset >= fileSize) {
+        return err(appError("VALIDATION_FAILED", "WAV input ends before its chunks are complete"));
+      }
+      if (fileOffset >= HEADER_SCAN_BOUND) {
+        return err(appError("VALIDATION_FAILED", "WAV header exceeds the size bound"));
+      }
+      const block = await readAt(
+        handle,
+        Math.min(READ_BLOCK, HEADER_SCAN_BOUND - fileOffset, fileSize - fileOffset),
+        fileOffset,
+      );
+      if (block.bytes.length === 0) {
+        return err(appError("VALIDATION_FAILED", "WAV input ends before its chunks are complete"));
+      }
+      buffered = Buffer.concat([buffered, block.bytes]);
+      fileOffset += block.bytes.length;
+    }
+    return ok(buffered);
+  };
+  const header = await fill(12);
+  if (header.isErr()) {
+    return err(header.error);
+  }
+  let view = header.value;
   if (
-    buffer.length < 44 ||
-    buffer.toString("ascii", 0, 4) !== "RIFF" ||
-    buffer.toString("ascii", 8, 12) !== "WAVE"
+    view.length < 12 ||
+    view.toString("ascii", 0, 4) !== "RIFF" ||
+    view.toString("ascii", 8, 12) !== "WAVE"
   ) {
     return err(appError("VALIDATION_FAILED", "WAV input is not a RIFF/WAVE file"));
   }
   let offset = 12;
   let format:
     { sampleRate: number; channels: number; bits: number; audioFormat: number } | undefined;
-  let dataOffset = -1;
-  let dataBytes = 0;
-  while (offset + 8 <= buffer.length) {
-    const id = buffer.toString("ascii", offset, offset + 4);
-    const size = buffer.readUInt32LE(offset + 4);
-    const body = offset + 8;
-    if (body + size > buffer.length && id !== "data") {
-      return err(appError("VALIDATION_FAILED", "WAV chunk extends beyond the file"));
+  for (;;) {
+    const chunkHead = await fill(offset + 8);
+    if (chunkHead.isErr()) {
+      return err(chunkHead.error);
     }
+    view = chunkHead.value;
+    const id = view.toString("ascii", offset, offset + 4);
+    const size = view.readUInt32LE(offset + 4);
+    const body = offset + 8;
     if (id === "fmt ") {
       if (size < 16) {
         return err(appError("VALIDATION_FAILED", "WAV format chunk is truncated"));
       }
+      const bodyFull = await fill(body + 16);
+      if (bodyFull.isErr()) {
+        return err(bodyFull.error);
+      }
+      view = bodyFull.value;
       format = {
-        audioFormat: buffer.readUInt16LE(body),
-        channels: buffer.readUInt16LE(body + 2),
-        sampleRate: buffer.readUInt32LE(body + 4),
-        bits: buffer.readUInt16LE(body + 14),
+        audioFormat: view.readUInt16LE(body),
+        channels: view.readUInt16LE(body + 2),
+        sampleRate: view.readUInt32LE(body + 4),
+        bits: view.readUInt16LE(body + 14),
       };
-    } else if (id === "data") {
-      dataOffset = body;
-      dataBytes = Math.min(size, buffer.length - body);
-      break;
+      offset = body + size + (size % 2);
+      continue;
+    }
+    if (id === "data") {
+      if (format === undefined) {
+        return err(appError("VALIDATION_FAILED", "WAV input is missing its format chunk"));
+      }
+      if (format.audioFormat !== 1 || format.bits !== 16) {
+        return err(appError("UNSUPPORTED", "WAV input must be 16-bit integer PCM"));
+      }
+      if (format.channels < 1 || format.channels > 2 || format.sampleRate <= 0) {
+        return err(appError("UNSUPPORTED", "WAV input must be mono or stereo at a positive rate"));
+      }
+      if (body + size > fileSize) {
+        return err(appError("VALIDATION_FAILED", "WAV data chunk extends beyond the file"));
+      }
+      const bytesPerFrame = format.channels * 2;
+      if (size % bytesPerFrame !== 0) {
+        return err(appError("VALIDATION_FAILED", "WAV data chunk is not frame aligned"));
+      }
+      return ok({
+        info: {
+          sampleRate: format.sampleRate,
+          channels: format.channels,
+          frames: size / bytesPerFrame,
+        },
+        dataOffset: body,
+        dataBytes: size,
+      });
     }
     offset = body + size + (size % 2);
   }
-  if (format === undefined || dataOffset < 0) {
-    return err(appError("VALIDATION_FAILED", "WAV input is missing format or data chunks"));
-  }
-  if (format.audioFormat !== 1 || format.bits !== 16) {
-    return err(appError("UNSUPPORTED", "WAV input must be 16-bit integer PCM"));
-  }
-  if (format.channels < 1 || format.channels > 2 || format.sampleRate <= 0) {
-    return err(appError("UNSUPPORTED", "WAV input must be mono or stereo at a positive rate"));
-  }
-  const bytesPerFrame = format.channels * 2;
-  if (dataBytes % bytesPerFrame !== 0) {
-    return err(appError("VALIDATION_FAILED", "WAV data chunk is not frame aligned"));
-  }
-  return ok({
-    info: {
-      sampleRate: format.sampleRate,
-      channels: format.channels,
-      frames: dataBytes / bytesPerFrame,
-    },
-    dataOffset,
-    dataBytes,
-  });
 }
 
 class WavCaptureSource implements CaptureSource {
@@ -105,20 +170,20 @@ class WavCaptureSource implements CaptureSource {
     let position = this.dataOffset;
     const endOfData = this.dataOffset + this.dataBytes;
     const startedAt = Date.now();
+    let lastYieldAt = startedAt;
     while (framesRead < this.info.frames) {
       if (signal.aborted || this.stopped) {
         break;
       }
       const wanted = Math.min(chunkFrames, this.info.frames - framesRead);
-      const buffer = Buffer.alloc(wanted * bytesPerFrame);
-      const { bytesRead } = await this.handle.read(buffer, 0, buffer.length, position);
-      if (bytesRead === 0) {
-        break;
+      const request = await readAt(this.handle, wanted * bytesPerFrame, position);
+      if (request.bytes.length === 0) {
+        throw appError("VALIDATION_FAILED", "WAV data ended before its declared extent");
       }
-      const completeFrames = Math.floor(bytesRead / bytesPerFrame);
+      const completeFrames = Math.floor(request.bytes.length / bytesPerFrame);
       const samples = new Float32Array(completeFrames * this.info.channels);
       for (let i = 0; i < samples.length; i += 1) {
-        samples[i] = buffer.readInt16LE(i * 2) / 32_768;
+        samples[i] = request.bytes.readInt16LE(i * 2) / 32_768;
       }
       seq += 1;
       yield {
@@ -126,20 +191,30 @@ class WavCaptureSource implements CaptureSource {
         chunk: { seq, startSample: framesRead, samples },
       };
       framesRead += completeFrames;
-      position += bytesRead;
+      position += request.bytes.length;
       if ((this.options.pacing ?? "realtime") === "realtime" && framesRead < this.info.frames) {
+        const sleep =
+          this.options.sleep ??
+          ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
         const audioMs = (framesRead / this.info.sampleRate) * 1000;
         const waitMs = audioMs - (Date.now() - startedAt);
         if (waitMs > 0) {
-          await (
-            this.options.sleep ??
-            ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-          )(waitMs);
+          await sleep(waitMs);
         }
+        const chunkMs = (completeFrames / this.info.sampleRate) * 1000;
+        const sinceYield = Date.now() - lastYieldAt;
+        const minInterval = chunkMs / 2;
+        if (sinceYield < minInterval) {
+          await sleep(minInterval - sinceYield);
+        }
+        lastYieldAt = Date.now();
       }
       if (position >= endOfData) {
         break;
       }
+    }
+    if (framesRead < this.info.frames && !signal.aborted && !this.stopped) {
+      throw appError("VALIDATION_FAILED", "WAV data ended before its declared extent");
     }
     seq += 1;
     yield {
@@ -173,9 +248,13 @@ export async function openWavSource(
   path: string,
   options: OpenWavOptions = {},
 ): Promise<Result<CaptureSource & { readonly info: WavInfo }, AppError>> {
+  const chunkFrames = options.chunkFrames ?? DEFAULT_CHUNK_FRAMES;
+  if (!Number.isInteger(chunkFrames) || chunkFrames < 1 || chunkFrames > MAX_CHUNK_FRAMES) {
+    return err(appError("VALIDATION_FAILED", "WAV chunk size is out of range"));
+  }
   let handle: FileHandle;
   try {
-    handle = await open(path, "r");
+    handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch {
     return err(appError("RESOURCE_ACQUIRE_FAILED", "WAV input could not be opened"));
   }
@@ -185,28 +264,24 @@ export async function openWavSource(
       await handle.close().catch(() => undefined);
       return err(appError("VALIDATION_FAILED", "WAV input must be a regular file"));
     }
-    const headerBytes = Math.min(stat.size, 1_048_576);
-    const buffer = Buffer.alloc(headerBytes);
-    await handle.read(buffer, 0, headerBytes, 0);
-    const parsed = parseWavHeader(buffer.subarray(0, headerBytes));
-    if (parsed.isErr()) {
+    const located = await locateWav(handle, stat.size);
+    if (located.isErr()) {
       await handle.close().catch(() => undefined);
-      return err(parsed.error);
-    }
-    if (parsed.value.dataOffset + parsed.value.dataBytes > stat.size) {
-      await handle.close().catch(() => undefined);
-      return err(appError("VALIDATION_FAILED", "WAV data chunk extends beyond the file"));
+      return err(located.error);
     }
     const source = new WavCaptureSource(
       handle,
-      parsed.value.info,
-      parsed.value.dataOffset,
-      parsed.value.dataBytes,
-      options,
+      located.value.info,
+      located.value.dataOffset,
+      located.value.dataBytes,
+      { ...options, chunkFrames },
     );
-    return ok(Object.assign(source, { info: parsed.value.info }));
-  } catch {
+    return ok(Object.assign(source, { info: located.value.info }));
+  } catch (thrown: unknown) {
     await handle.close().catch(() => undefined);
+    if (isAppError(thrown)) {
+      return err(thrown);
+    }
     return err(appError("RESOURCE_ACQUIRE_FAILED", "WAV input could not be read"));
   }
 }
