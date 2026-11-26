@@ -47,6 +47,7 @@ describe("errors", () => {
     expect(isAppError(appError("INTERNAL", "x"))).toBe(true);
     expect(isAppError({ code: "NOPE", message: "x" })).toBe(false);
     expect(isAppError({ code: "INTERNAL" })).toBe(false);
+    expect(isAppError({ code: "CANCELLED", message: "s3cr3t" })).toBe(false);
     expect(isAppError(null)).toBe(false);
     expect(isAppError("INTERNAL")).toBe(false);
   });
@@ -55,13 +56,15 @@ describe("errors", () => {
     const fromError = toAppError(new Error("kaput"), "fallback");
     expect(fromError.code).toBe("INTERNAL");
     expect(fromError.message).toBe("fallback");
-    expect(fromError.details).toEqual({ thrown: "kaput" });
+    expect("details" in fromError).toBe(false);
     const controller = new AbortController();
     controller.abort();
     const fromAbort = toAppError(controller.signal.reason, "fallback");
     expect(fromAbort.code).toBe("CANCELLED");
     const passthrough: AppError = appError("INTERNAL", "x");
     expect(toAppError(passthrough, "fallback")).toBe(passthrough);
+    const foreignShape = toAppError({ code: "CANCELLED", message: "s3cr3t" }, "fallback");
+    expect(foreignShape).toEqual({ code: "INTERNAL", message: "fallback" });
     const fromUnknown = toAppError(undefined, "fallback");
     expect(fromUnknown).toEqual({ code: "INTERNAL", message: "fallback" });
   });

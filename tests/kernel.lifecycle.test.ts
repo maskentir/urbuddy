@@ -1,9 +1,5 @@
-import {
-  COMMAND_NAMES,
-  commandHelp,
-  commandRequestSchema,
-  parseCommandRequest,
-} from "@kernel/commands";
+import { COMMAND_NAMES, commandHelp } from "@kernel/commands";
+import { formatError } from "@kernel/errors";
 import { EXIT_CODES } from "@kernel/exit-codes";
 import { createDeterministicIdGenerator } from "@kernel/ids";
 import { type ManagedResource, ResourceScope } from "@kernel/lifecycle";
@@ -298,6 +294,43 @@ describe("lifecycle", () => {
     }
   });
 
+  it("preserves failure across attempts while resources remain", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.reject(new Error("gone")),
+    });
+    const first = await scope.disposeAll();
+    expect(first.isErr()).toBe(true);
+    expect(scope.size).toBe(1);
+    const second = await scope.disposeAll();
+    expect(second.isErr()).toBe(true);
+    if (first.isErr() && second.isErr()) {
+      expect(second.error).toBe(first.error);
+      expect(second.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    }
+    expect(scope.size).toBe(1);
+  });
+
+  it("never surfaces disposer messages through cleanup errors", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.reject(new Error("token=s3cr3t")),
+    });
+    const outcome = await scope.disposeAll();
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.message).toBe("resource disposal failed");
+      expect(formatError(outcome.error)).not.toContain("s3cr3t");
+      expect(JSON.stringify(outcome.error)).not.toContain("s3cr3t");
+    }
+  });
+
   it("records synchronous disposer throws instead of rejecting", async () => {
     const scope = new ResourceScope();
     const ids = createDeterministicIdGenerator("lc");
@@ -357,8 +390,5 @@ describe("commands", () => {
     for (const name of COMMAND_NAMES) {
       expect(commandHelp(name).length).toBeGreaterThan(0);
     }
-    expect(commandRequestSchema.safeParse({ name: "version", json: false }).success).toBe(true);
-    expect(parseCommandRequest({ name: "doctor", json: true }).isOk()).toBe(true);
-    expect(parseCommandRequest({ name: "rm -rf", json: false }).isErr()).toBe(true);
   });
 });

@@ -10,11 +10,14 @@ export const ERROR_CODES = [
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
+const errorBrand: unique symbol = Symbol("urbuddy.error");
+
 export interface AppError {
   readonly code: ErrorCode;
   readonly message: string;
   readonly correlationId?: string;
   readonly details?: Readonly<Record<string, string>>;
+  readonly [errorBrand]?: true;
 }
 
 export interface AppErrorOptions {
@@ -32,7 +35,9 @@ export function appError(
     message: string;
     correlationId?: string;
     details?: Readonly<Record<string, string>>;
+    [errorBrand]?: true;
   } = { code, message };
+  Object.defineProperty(out, errorBrand, { value: true as const });
   if (options.correlationId !== undefined) {
     out.correlationId = options.correlationId;
   }
@@ -42,11 +47,15 @@ export function appError(
   return out;
 }
 
+/** [correctness] The brand separates factory errors from foreign lookalikes, so shape alone never grants trust. */
 export function isAppError(value: unknown): value is AppError {
   if (typeof value !== "object" || value === null) {
     return false;
   }
-  const record = value as Record<string, unknown>;
+  const record = value as Record<string | symbol, unknown>;
+  if (record[errorBrand] !== true) {
+    return false;
+  }
   return (
     typeof record["code"] === "string" &&
     (ERROR_CODES as readonly string[]).includes(record["code"]) &&
@@ -66,12 +75,6 @@ export function toAppError(thrown: unknown, fallbackMessage: string): AppError {
       (thrown as { name?: unknown }).name === "AbortError"
     ) {
       return appError("CANCELLED", fallbackMessage);
-    }
-    if (thrown instanceof Error) {
-      const details = thrown.message !== "" ? { thrown: thrown.message } : undefined;
-      return details === undefined
-        ? appError("INTERNAL", fallbackMessage)
-        : appError("INTERNAL", fallbackMessage, { details });
     }
     return appError("INTERNAL", fallbackMessage);
   } catch {

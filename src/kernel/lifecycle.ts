@@ -11,9 +11,7 @@ export interface ManagedResource {
 }
 
 type Settlement =
-  | { readonly status: "done" }
-  | { readonly status: "abandoned" }
-  | { readonly status: "failed"; readonly cause: unknown };
+  { readonly status: "done" } | { readonly status: "abandoned" } | { readonly status: "failed" };
 
 async function settleDispose(
   start: () => Promise<void>,
@@ -24,8 +22,8 @@ async function settleDispose(
     try {
       await pending;
       return { status: "done" };
-    } catch (thrown: unknown) {
-      return { status: "failed", cause: thrown };
+    } catch {
+      return { status: "failed" };
     }
   }
   if (signal.aborted) {
@@ -40,7 +38,7 @@ async function settleDispose(
     return await Promise.race([
       pending.then<Settlement, Settlement>(
         (): Settlement => ({ status: "done" }),
-        (thrown: unknown): Settlement => ({ status: "failed", cause: thrown }),
+        (): Settlement => ({ status: "failed" }),
       ),
       abortGate,
     ]);
