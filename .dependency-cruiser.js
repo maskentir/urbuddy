@@ -76,7 +76,21 @@ export default {
       comment:
         "Adapters translate vendor APIs into kernel contracts; they never import domain, UI, or composition layers.",
       from: { path: "^src/adapters" },
-      to: { path: "^(src/modules|src/presentation|src/bootstrap)" },
+      to: {
+        path: "^(src/modules|src/presentation|src/bootstrap)",
+        pathNot: "^src/modules/perception/audio",
+      },
+    },
+    {
+      name: "adapters-port-type-only",
+      severity: "error",
+      comment:
+        "Adapters may implement public application-owned ports, but only as types; values stay domain-owned.",
+      from: { path: "^src/adapters" },
+      to: {
+        path: "^src/modules/perception/audio",
+        dependencyTypesNot: ["type-only"],
+      },
     },
     {
       name: "adapters-owned-by-bootstrap",
