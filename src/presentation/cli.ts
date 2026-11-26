@@ -13,6 +13,7 @@ import { runInkSmoke } from "./ink-smoke.js";
 import { createStreamOutput } from "./output.js";
 import type { CliOutput } from "./output.js";
 import type { ReplayPort } from "./replay.js";
+import type { TranscribeInput, TranscribePort } from "./transcribe.js";
 
 export interface CliDeps {
   readonly version: string;
@@ -24,6 +25,7 @@ export interface CliDeps {
   readonly signal: AbortSignal;
   readonly replayPort?: ReplayPort;
   readonly capturePort?: CapturePort;
+  readonly transcribePort?: TranscribePort;
 }
 
 export interface DoctorCheck {
@@ -251,6 +253,71 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
         throw result.error;
       }
     });
+
+  program
+    .command("transcribe")
+    .description(commandHelp("transcribe"))
+    .option("--provider <name>", "speech provider (muse)", "muse")
+    .option("--file <wav>", "transcribe a local WAV file paced as a live stream")
+    .option("--duration <seconds>", "live capture duration in seconds (1 to 300)", "30")
+    .option("--mode <mode>", "recognition mode (endpointing or diarization)", "endpointing")
+    .option("--keywords <terms>", "comma-separated vocabulary biasing terms")
+    .option("--json", "emit one stable JSON object per line", false)
+    .action(
+      async (options: {
+        provider: string;
+        file?: string;
+        duration: string;
+        mode: string;
+        keywords?: string;
+        json: boolean;
+      }) => {
+        if (deps.transcribePort === undefined) {
+          throw new Error("transcribe is not wired");
+        }
+        if (options.provider !== "muse") {
+          throw appError("VALIDATION_FAILED", "only the muse provider is implemented");
+        }
+        if (options.mode !== "endpointing" && options.mode !== "diarization") {
+          throw appError("VALIDATION_FAILED", "transcribe mode must be endpointing or diarization");
+        }
+        if (!/^\d+$/.test(options.duration)) {
+          throw appError("VALIDATION_FAILED", "transcribe duration must be 1 to 300 seconds");
+        }
+        const durationSeconds = Number.parseInt(options.duration, 10);
+        if (
+          !Number.isSafeInteger(durationSeconds) ||
+          durationSeconds < 1 ||
+          durationSeconds > 300
+        ) {
+          throw appError("VALIDATION_FAILED", "transcribe duration must be 1 to 300 seconds");
+        }
+        const keywords =
+          options.keywords === undefined
+            ? []
+            : options.keywords
+                .split(",")
+                .map((term) => term.trim())
+                .filter((term) => term.length > 0);
+        if (keywords.length > 100 || keywords.some((term) => term.length > 64)) {
+          throw appError("VALIDATION_FAILED", "vocabulary terms exceed the supported bound");
+        }
+        const transcribeInput: TranscribeInput = {
+          ...(options.file === undefined ? {} : { file: options.file }),
+          durationMs: durationSeconds * 1000,
+          mode: options.mode,
+          keywords,
+          json: options.json,
+          signal: deps.signal,
+          output,
+          env: process.env,
+        };
+        const result = await deps.transcribePort(transcribeInput);
+        if (result.isErr()) {
+          throw result.error;
+        }
+      },
+    );
 
   program
     .command("replay")

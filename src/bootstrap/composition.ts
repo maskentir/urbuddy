@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capture-source";
+import { openWavSource } from "@adapters/audio/wav-source";
+import { createMuseProvider } from "@adapters/speech/muse";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
-import { formatError, toAppError, type AppError } from "@kernel/errors";
+import { appError, formatError, toAppError, type AppError } from "@kernel/errors";
 import { EXIT_CODES, type ExitCode } from "@kernel/exit-codes";
 import {
   createCryptoIdGenerator,
@@ -28,6 +30,7 @@ import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { createCapturePort } from "@presentation/capture";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
+import { createTranscribePort } from "@presentation/transcribe";
 import { err, ok, type Result } from "neverthrow";
 
 import { URBUDDY_VERSION } from "./version.js";
@@ -121,6 +124,43 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
       clock: app.clock,
       ...(isPermitted(app.policy, "spawn-child-process")
         ? { spawnSource: spawnAudioSource, resolveHelper: resolveBundledHelperPath }
+        : {}),
+    }),
+    transcribePort: createTranscribePort({
+      clock: app.clock,
+      ...(isPermitted(app.policy, "network-egress")
+        ? {
+            createProvider: (env: Readonly<Record<string, string | undefined>>) => {
+              const apiKey = env["MODEL_API_KEY"];
+              if (apiKey === undefined || apiKey.trim().length === 0) {
+                return err(
+                  appError(
+                    "CONFIG_INVALID",
+                    "speech provider credential is not configured (set MODEL_API_KEY)",
+                  ),
+                );
+              }
+              const endpoint = env["URBUDDY_MUSE_ENDPOINT"];
+              return ok(
+                createMuseProvider({
+                  apiKey,
+                  ...(endpoint === undefined || endpoint === "" ? {} : { endpoint }),
+                }),
+              );
+            },
+            openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
+          }
+        : {}),
+      ...(isPermitted(app.policy, "spawn-child-process")
+        ? {
+            spawnCapture: () => {
+              const helper = resolveBundledHelperPath(process.env);
+              if (helper.isErr()) {
+                return err(helper.error);
+              }
+              return spawnAudioSource({ helperPath: helper.value });
+            },
+          }
         : {}),
     }),
     replayPort: createReplayPort({
