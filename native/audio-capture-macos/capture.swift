@@ -1,4 +1,5 @@
 import CoreAudio
+import Darwin
 import Foundation
 
 let frameMagic: UInt32 = 0x55424431
@@ -17,6 +18,7 @@ struct Options {
   var runMs: UInt64 = 0
   var syntheticFrames: UInt64 = 0
   var chunkFrames: UInt32 = 2048
+  var ringSlots: UInt32 = 64
 }
 
 func parseOptions(_ args: [String]) -> Options? {
@@ -39,6 +41,9 @@ func parseOptions(_ args: [String]) -> Options? {
     case "--chunk-frames":
       guard let value = takeNumber(), value >= 256, value <= 8192 else { return nil }
       out.chunkFrames = UInt32(value)
+    case "--ring-slots":
+      guard let value = takeNumber(), value >= 1, value <= 1024 else { return nil }
+      out.ringSlots = UInt32(value)
     default:
       return nil
     }
@@ -93,73 +98,125 @@ func formatPayload(sampleRate: UInt32, channels: UInt16) -> Data {
   return payload
 }
 
-func audioPayload(startSample: UInt64, samples: [Float32], count: Int) -> Data {
+func audioPayload(startFrame: UInt64, samples: [Float32], count: Int) -> Data {
   var payload = Data()
   payload.reserveCapacity(8 + count * 4)
-  appendLE(startSample, to: &payload)
+  appendLE(startFrame, to: &payload)
   samples.withUnsafeBytes { payload.append(contentsOf: $0.prefix(count * 4)) }
   return payload
 }
 
-func endPayload(captured: UInt64, delivered: UInt64, dropped: UInt64, reason: UInt16) -> Data {
+func endPayload(
+  captured: UInt64, delivered: UInt64, dropped: UInt64, reason: UInt16, sourceFrames: UInt64
+) -> Data {
   var payload = Data()
   appendLE(captured, to: &payload)
   appendLE(delivered, to: &payload)
   appendLE(dropped, to: &payload)
   appendLE(reason, to: &payload)
+  appendLE(sourceFrames, to: &payload)
   return payload
 }
 
-final class FrameRing: @unchecked Sendable {
-  private let lock = NSLock()
+final class Handoff: @unchecked Sendable {
+  private var lock = os_unfair_lock()
   private var slots: [[Float32]]
+  private var starts: [UInt64]
   private var filled: [Int]
   private var head = 0
   private var tail = 0
   private var count = 0
-  var dropped: UInt64 = 0
+  private let channels: Int
+  private var capturedChunks: UInt64 = 0
+  private var droppedChunks: UInt64 = 0
+  private var sourceFrames: UInt64 = 0
+  private var layout: (buffers: Int, sizes: [Int])?
 
-  init(slotCount: Int, slotSamples: Int) {
+  init(slotCount: Int, slotSamples: Int, channels: Int) {
     slots = Array(repeating: Array(repeating: 0, count: slotSamples), count: slotCount)
+    starts = Array(repeating: 0, count: slotCount)
     filled = Array(repeating: 0, count: slotCount)
+    self.channels = channels
   }
 
-  var capacity: Int { slots.count }
+  var slotSamples: Int { slots.first?.count ?? 0 }
 
-  func push(_ source: UnsafePointer<Float32>, sampleCount: Int) {
-    lock.lock()
-    defer { lock.unlock() }
-    if count == slots.count {
-      dropped += 1
-      return
+  @discardableResult
+  func push(sampleCount: Int, body: (UnsafeMutablePointer<Float32>) -> Void) -> UInt64? {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    guard sampleCount > 0, sampleCount % channels == 0 else {
+      droppedChunks += 1
+      sourceFrames += UInt64(max(sampleCount, 0) / max(channels, 1))
+      return nil
+    }
+    let start = sourceFrames
+    sourceFrames += UInt64(sampleCount / channels)
+    if count == slots.count || sampleCount > slots[tail].count {
+      droppedChunks += 1
+      return nil
     }
     let slot = tail
     slots[slot].withUnsafeMutableBufferPointer { dest in
-      dest.baseAddress?.update(from: source, count: min(sampleCount, dest.count))
+      if let base = dest.baseAddress {
+        body(base)
+      }
     }
-    filled[slot] = min(sampleCount, slots[slot].count)
+    starts[slot] = start
+    filled[slot] = sampleCount
     tail = (tail + 1) % slots.count
     count += 1
+    capturedChunks += 1
+    return start
   }
 
-  func pop(into dest: inout [Float32]) -> Int {
-    lock.lock()
-    defer { lock.unlock() }
-    if count == 0 { return 0 }
+  func pop(into dest: inout [Float32]) -> (start: UInt64, count: Int)? {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    if count == 0 { return nil }
     let slot = head
     let n = filled[slot]
+    let start = starts[slot]
     dest.withUnsafeMutableBufferPointer { out in
       out.baseAddress?.update(from: slots[slot], count: min(n, out.count))
     }
     head = (head + 1) % slots.count
     count -= 1
-    return n
+    return (start, min(n, dest.count))
   }
 
-  func snapshotDropped() -> UInt64 {
-    lock.lock()
-    defer { lock.unlock() }
-    return dropped
+  func hasPending() -> Bool {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    return count > 0
+  }
+
+  func hasLayout() -> Bool {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    return layout != nil
+  }
+
+  func noteLayout(buffers: Int, sizes: [Int]) {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    if layout == nil {
+      layout = (buffers, sizes)
+    }
+  }
+
+  func takeLayout() -> (buffers: Int, sizes: [Int])? {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    let out = layout
+    layout = nil
+    return out
+  }
+
+  func snapshot() -> (captured: UInt64, dropped: UInt64, sourceFrames: UInt64) {
+    os_unfair_lock_lock(&lock)
+    defer { os_unfair_lock_unlock(&lock) }
+    return (capturedChunks, droppedChunks, sourceFrames)
   }
 }
 
@@ -196,11 +253,8 @@ final class RealCapture {
   var tapID = AudioObjectID(0)
   var aggID = AudioObjectID(0)
   var procID: AudioDeviceIOProcID?
-  var ring: FrameRing?
-  var capturedChunks: UInt64 = 0
-  var deliveredSamples: UInt64 = 0
+  var handoff: Handoff?
   var channels: UInt32 = 0
-  var signalReported = false
 
   init(options: Options) {
     self.options = options
@@ -288,35 +342,46 @@ final class RealCapture {
       return false
     }
     let slotSamples = Int(options.chunkFrames) * Int(channels)
-    ring = FrameRing(slotCount: 64, slotSamples: slotSamples)
+    handoff = Handoff(
+      slotCount: Int(options.ringSlots), slotSamples: slotSamples, channels: Int(channels))
+    guard let handoff else { return false }
     var created: AudioDeviceIOProcID?
     let createStatus = AudioDeviceCreateIOProcIDWithBlock(&created, aggID, nil) {
       _, inInputData, _, _, _ in
-      let abl = inInputData.pointee
-      if !self.signalReported {
-        self.signalReported = true
-        var sizes = [String]()
-        withUnsafePointer(to: abl) { ptr in
-          for b in 0..<Int(abl.mNumberBuffers) {
-            let buf = UnsafeRawPointer(ptr).advanced(by: MemoryLayout<AudioBufferList>.size + b * MemoryLayout<AudioBuffer>.size)
-              .assumingMemoryBound(to: AudioBuffer.self).pointee
-            sizes.append("\(buf.mDataByteSize)")
-          }
+      let bufferCount = Int(inInputData.pointee.mNumberBuffers)
+      guard bufferCount >= 1 else { return }
+      guard let baseOffset = MemoryLayout<AudioBufferList>.offset(of: \.mBuffers) else { return }
+      let first = (UnsafeRawPointer(inInputData) + baseOffset).assumingMemoryBound(to: AudioBuffer.self)
+      var totalBytes = 0
+      var valid = true
+      for i in 0..<bufferCount {
+        let buf = first[i]
+        guard let data = buf.mData else { continue }
+        if Int(bitPattern: data) % 4 != 0 || buf.mDataByteSize % 4 != 0 {
+          valid = false
+          break
         }
-        emitState("signal", attempt: 1, extra: [
-          ("buffers", "\(abl.mNumberBuffers)"), ("bytes", "\"\(sizes.joined(separator: ","))\""),
-        ])
+        totalBytes += Int(buf.mDataByteSize)
       }
-      guard abl.mNumberBuffers == 1 else { return }
-      let buf: AudioBuffer = withUnsafePointer(to: abl) { ptr in
-        UnsafeRawPointer(ptr).advanced(by: MemoryLayout<AudioBufferList>.size)
-          .assumingMemoryBound(to: AudioBuffer.self).pointee
+      if !valid || totalBytes == 0 { return }
+      if !handoff.hasLayout() {
+        var sizes = [Int]()
+        for i in 0..<bufferCount {
+          sizes.append(Int(first[i].mDataByteSize))
+        }
+        handoff.noteLayout(buffers: bufferCount, sizes: sizes)
       }
-      guard let data = buf.mData else { return }
-      let floats = data.assumingMemoryBound(to: Float32.self)
-      let count = Int(buf.mDataByteSize) / 4
-      self.ring?.push(floats, sampleCount: count)
-      self.capturedChunks += 1
+      handoff.push(sampleCount: totalBytes / 4) { dest in
+        var offset = 0
+        for i in 0..<bufferCount {
+          let buf = first[i]
+          guard let data = buf.mData else { continue }
+          let floats = data.assumingMemoryBound(to: Float32.self)
+          let count = Int(buf.mDataByteSize) / 4
+          dest.advanced(by: offset).update(from: floats, count: count)
+          offset += count
+        }
+      }
     }
     guard createStatus == noErr, let created else {
       emitState("error", attempt: 0, extra: [("stage", "\"create-ioproc\"")])
@@ -346,22 +411,52 @@ final class RealCapture {
     }
   }
 
-  func teardown() {
+  func teardown() -> Bool {
+    var ok = true
     if let procID, aggID != 0 {
-      AudioDeviceStop(aggID, procID)
-      AudioDeviceDestroyIOProcID(aggID, procID)
+      if AudioDeviceStop(aggID, procID) != noErr { ok = false }
+      if AudioDeviceDestroyIOProcID(aggID, procID) != noErr { ok = false }
       self.procID = nil
     }
     if aggID != 0 {
-      AudioHardwareDestroyAggregateDevice(aggID)
+      if AudioHardwareDestroyAggregateDevice(aggID) != noErr { ok = false }
       aggID = 0
     }
     destroyTap()
+    return ok
+  }
+
+  func stopEngine() -> Bool {
+    guard let procID, aggID != 0 else { return false }
+    let status = AudioDeviceStop(aggID, procID)
+    self.procID = nil
+    return status == noErr
+  }
+
+  func drain(handoff: Handoff, seq: inout UInt64, deliveredFrames: inout UInt64) -> Bool {
+    var scratch = [Float32](repeating: 0, count: handoff.slotSamples)
+    while let popped = handoff.pop(into: &scratch) {
+      let ok = writeFrame(
+        kind: kindAudio, seq: seq,
+        payload: audioPayload(startFrame: popped.start, samples: scratch, count: popped.count))
+      deliveredFrames += 1
+      seq += 1
+      if !ok { return false }
+    }
+    return true
   }
 
   func run() -> Int32 {
+    guard #available(macOS 14.2, *) else {
+      emitState("error", attempt: 0, extra: [("stage", "\"unsupported-os\"")])
+      return 3
+    }
     var format = AudioStreamBasicDescription()
     guard acquire(format: &format) else { return 3 }
+    guard let handoff else {
+      teardown()
+      return 3
+    }
     guard start(attempt: 1) else {
       teardown()
       return 3
@@ -373,80 +468,110 @@ final class RealCapture {
       teardown()
       return 3
     }
-    let chunkSamples = Int(options.chunkFrames) * Int(channelCount)
-    var scratch = [Float32](repeating: 0, count: chunkSamples)
-    var seq: UInt64 = 1
-    var deliveredFrames: UInt64 = 0
+    var scratch = [Float32](repeating: 0, count: handoff.slotSamples)
+    var layoutReported = false
     let deadline = options.runMs == 0 ? nil as Date? : Date(timeIntervalSinceNow: Double(options.runMs) / 1000.0)
     var reason = endCompleted
-    while true {
+    var seq: UInt64 = 1
+    var deliveredFrames: UInt64 = 0
+    var writerAlive = true
+    while writerAlive {
       if terminationRequested {
         reason = endCancelled
         break
       }
       if let deadline, Date() >= deadline { break }
-      let n = ring?.pop(into: &scratch) ?? 0
-      if n == 0 {
-        Thread.sleep(forTimeInterval: 0.002)
-        continue
+      if !layoutReported, let layout = handoff.takeLayout() {
+        layoutReported = true
+        emitState("signal", attempt: 1, extra: [
+          ("buffers", "\(layout.buffers)"), ("bytes", "\"\(layout.sizes.map(String.init).joined(separator: ","))\""),
+        ])
       }
-      let samplesPerChannel = n / Int(channelCount)
-      let ok = writeFrame(
-        kind: kindAudio, seq: seq,
-        payload: audioPayload(startSample: deliveredSamples / UInt64(channelCount), samples: scratch, count: n))
-      deliveredSamples += UInt64(n)
-      deliveredFrames += 1
-      seq += 1
-      if !ok { break }
-      if samplesPerChannel == 0 { break }
+      if let popped = handoff.pop(into: &scratch) {
+        let ok = writeFrame(
+          kind: kindAudio, seq: seq,
+          payload: audioPayload(startFrame: popped.start, samples: scratch, count: popped.count))
+        deliveredFrames += 1
+        seq += 1
+        if !ok { writerAlive = false }
+      } else {
+        Thread.sleep(forTimeInterval: 0.002)
+      }
     }
-    let dropped = ring?.snapshotDropped() ?? 0
+    let stopped = stopEngine()
+    let drained = drain(handoff: handoff, seq: &seq, deliveredFrames: &deliveredFrames)
+    let snapshot = handoff.snapshot()
     _ = writeFrame(
       kind: kindEnd, seq: seq,
       payload: endPayload(
-        captured: capturedChunks, delivered: deliveredFrames, dropped: dropped, reason: reason))
-    teardown()
+        captured: snapshot.captured, delivered: deliveredFrames, dropped: snapshot.dropped,
+        reason: reason, sourceFrames: snapshot.sourceFrames))
+    let tornDown = teardown()
     emitState("end", attempt: 1, extra: [
-      ("captured", "\(capturedChunks)"), ("delivered", "\(deliveredFrames)"),
-      ("dropped", "\(dropped)"), ("cancelled", reason == endCancelled ? "true" : "false"),
+      ("captured", "\(snapshot.captured)"), ("delivered", "\(deliveredFrames)"),
+      ("dropped", "\(snapshot.dropped)"), ("cancelled", reason == endCancelled ? "true" : "false"),
     ])
-    return 0
+    return stopped && drained && tornDown ? 0 : 3
   }
 }
 
 func runSynthetic(options: Options) -> Int32 {
   let sampleRate: UInt32 = 48_000
-  let channelCount: UInt16 = 2
-  let chunkSamples = Int(options.chunkFrames) * Int(channelCount)
-  var scratch = [Float32](repeating: 0, count: chunkSamples)
+  let channelCount = 2
+  let chunkSamples = Int(options.chunkFrames) * channelCount
+  let handoff = Handoff(slotCount: Int(options.ringSlots), slotSamples: chunkSamples, channels: channelCount)
   emitState("ready", attempt: 1, extra: [("mode", "\"synthetic\"")])
-  guard writeFrame(kind: kindFormat, seq: 0, payload: formatPayload(sampleRate: sampleRate, channels: channelCount)) else {
+  guard writeFrame(kind: kindFormat, seq: 0, payload: formatPayload(sampleRate: sampleRate, channels: UInt16(channelCount))) else {
     return 3
   }
   var phase = 0.0
   let step = 2.0 * Double.pi * 440.0 / Double(sampleRate)
+  var produced: UInt64 = 0
+  var seq: UInt64 = 1
   var deliveredFrames: UInt64 = 0
-  for frame in 0..<options.syntheticFrames {
-    if terminationRequested { break }
-    for i in 0..<Int(options.chunkFrames) {
-      let value = Float32(0.5 * sin(phase))
-      phase += step
-      scratch[i * 2] = value
-      scratch[i * 2 + 1] = value
+  var scratch = [Float32](repeating: 0, count: chunkSamples)
+  var reason = endCompleted
+  while produced < options.syntheticFrames && !terminationRequested {
+    handoff.push(sampleCount: chunkSamples) { dest in
+      for i in 0..<Int(options.chunkFrames) {
+        let value = Float32(0.5 * sin(phase))
+        phase += step
+        dest[i * 2] = value
+        dest[i * 2 + 1] = value
+      }
     }
-    let ok = writeFrame(
-      kind: kindAudio, seq: frame + 1,
-      payload: audioPayload(
-        startSample: frame * UInt64(options.chunkFrames), samples: scratch, count: chunkSamples))
-    if !ok { return 3 }
-    deliveredFrames += 1
+    produced += 1
+    while let popped = handoff.pop(into: &scratch) {
+      if terminationRequested { break }
+      let ok = writeFrame(
+        kind: kindAudio, seq: seq,
+        payload: audioPayload(startFrame: popped.start, samples: scratch, count: popped.count))
+      deliveredFrames += 1
+      seq += 1
+      if !ok { return 3 }
+    }
   }
+  if terminationRequested {
+    reason = endCancelled
+  } else {
+    while let popped = handoff.pop(into: &scratch) {
+      let ok = writeFrame(
+        kind: kindAudio, seq: seq,
+        payload: audioPayload(startFrame: popped.start, samples: scratch, count: popped.count))
+      deliveredFrames += 1
+      seq += 1
+      if !ok { return 3 }
+    }
+  }
+  let snapshot = handoff.snapshot()
   _ = writeFrame(
-    kind: kindEnd, seq: options.syntheticFrames + 1,
-    payload: endPayload(captured: deliveredFrames, delivered: deliveredFrames, dropped: 0, reason: endCompleted))
+    kind: kindEnd, seq: seq,
+    payload: endPayload(
+      captured: snapshot.captured, delivered: deliveredFrames, dropped: snapshot.dropped,
+      reason: reason, sourceFrames: snapshot.sourceFrames))
   emitState("end", attempt: 1, extra: [
-    ("captured", "\(deliveredFrames)"), ("delivered", "\(deliveredFrames)"),
-    ("dropped", "0"), ("cancelled", "false"),
+    ("captured", "\(snapshot.captured)"), ("delivered", "\(deliveredFrames)"),
+    ("dropped", "\(snapshot.dropped)"), ("cancelled", reason == endCancelled ? "true" : "false"),
   ])
   return 0
 }
@@ -454,7 +579,7 @@ func runSynthetic(options: Options) -> Int32 {
 signal(SIGTERM, requestTermination)
 
 guard let options = parseOptions(CommandLine.arguments) else {
-  FileHandle.standardError.write(Data("usage: urbuddy-audio-capture [--run-ms N] [--synthetic-frames N] [--chunk-frames N]\n".utf8))
+  FileHandle.standardError.write(Data("usage: urbuddy-audio-capture [--run-ms N] [--synthetic-frames N] [--chunk-frames N] [--ring-slots N]\n".utf8))
   exit(2)
 }
 
