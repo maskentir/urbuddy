@@ -97,28 +97,49 @@ pnpm ink-smoke
 | `ink-smoke`               | run the Ink startup/shutdown path via tsx                   |
 | `brand`                   | regenerate the `assets/brand` artwork                       |
 
-### Layout
+### System Anatomy
 
-`src/bootstrap` composition root and entry. `src/kernel` errors, branded
-ids, clocks, lifecycle, correlation, log levels, and the enforced
-catalogs (commands, exit codes, resources). `src/modules/config`
-pure session loader (defaults < `URBUDDY_*` env < flags, profiles can
-only restrict). `src/modules/security` default-deny policy.
-`src/platform` paths (env-paths), structured logging, output helpers.
-`src/presentation` commander CLI and the Ink smoke component.
-`tests/` the deterministic suite. `docs/` covers implemented catalogs
-([catalogs](./docs/catalogs.md)) and every dependency with rationale and
-ownership ([dependencies](./docs/dependencies.md)). `assets/brand` holds
-the generated README artwork; `tooling/generate-brand.mjs` (Node
-standard library only, deterministic) regenerates it.
+| Directory              | Responsibility                                     | Source                             |
+| ---------------------- | -------------------------------------------------- | ---------------------------------- |
+| `src/bootstrap`        | Composition root and application entry             | [bootstrap](./src/bootstrap)       |
+| `src/kernel`           | Errors, identity, lifecycle, and shared primitives | [kernel](./src/kernel)             |
+| `src/modules/config`   | Validated session configuration                    | [config](./src/modules/config)     |
+| `src/modules/security` | Default-deny security policy                       | [security](./src/modules/security) |
+| `src/platform`         | Infrastructure, logging, paths, and output         | [platform](./src/platform)         |
+| `src/presentation`     | Commander CLI and Ink terminal                     | [presentation](./src/presentation) |
+| `tests/`               | Behavioral verification                            | [tests](./tests)                   |
+| `docs/`                | Canonical project knowledge and decisions          | [docs](./docs)                     |
+| `assets/brand/`        | Generated visual identity                          | [brand](./assets/brand)            |
+| `tooling/`             | Developer tooling and artwork generation           | [tooling](./tooling)               |
 
-### Configuration
+Only implemented directories are listed. Planned modules stay out of
+this table until they exist. Implemented catalogs live in
+[docs/catalogs.md](./docs/catalogs.md); every dependency with rationale
+and ownership in [docs/dependencies.md](./docs/dependencies.md).
+`tooling/generate-brand.mjs` (Node standard library only,
+deterministic) regenerates the artwork via `pnpm brand`.
 
-Precedence: built-in defaults, then `URBUDDY_PROFILE`,
-`URBUDDY_LOG_LEVEL`, `URBUDDY_DATA_ROOT`, `URBUDDY_ALLOW_EGRESS`,
-`URBUDDY_ALLOW_CHILD`, then CLI flags (`--profile`, `--log-level`,
-`--data-root`, `--allow-egress`, `--allow-child`). Profiles
-(`development`, `simulation`, `evaluation`, `personal`, `offline`) can
-only restrict: forbidden grants are `CONFIG_INVALID` (exit 3).
+### Control Panel
+
+Configuration precedence, highest priority last:
+
+built-in defaults → environment variables → CLI flags → profile
+security ceiling → validated session configuration.
+
+A profile can only restrict: no flag, variable, or profile grants a
+permission the ceiling denies. Forbidden grants fail fast.
+
+| Environment variable   | CLI override     |
+| ---------------------- | ---------------- |
+| `URBUDDY_PROFILE`      | `--profile`      |
+| `URBUDDY_LOG_LEVEL`    | `--log-level`    |
+| `URBUDDY_DATA_ROOT`    | `--data-root`    |
+| `URBUDDY_ALLOW_EGRESS` | `--allow-egress` |
+| `URBUDDY_ALLOW_CHILD`  | `--allow-child`  |
+
+Available profiles: `development`, `simulation`, `evaluation`,
+`personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit
+code 3). Validation rejects bad configuration; runtime enforcement
+happens at the operation boundary, not in the parser.
 
 <p align="center"><img src="assets/brand/footer.svg" width="100%" alt="Closing. Hear, understand, respond, evolve." /></p>
