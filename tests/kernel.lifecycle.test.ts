@@ -159,15 +159,47 @@ describe("lifecycle", () => {
     controller.abort();
     const outcome = await disposing;
     expect(outcome.isErr()).toBe(true);
-    if (outcome.isErr()) {
-      expect(outcome.error.code).toBe("CANCELLED");
-      expect(outcome.error.details).toEqual({ resourceId: stuckId });
+    if (!outcome.isErr()) {
+      throw new Error("expected disposal to fail");
     }
+    expect(outcome.error.code).toBe("CANCELLED");
+    expect(outcome.error.details).toEqual({ resourceId: stuckId });
     expect(released).toEqual(["stuck"]);
+    expect(scope.size).toBe(2);
+    expect(scope.isDisposed).toBe(false);
+    const retry = await scope.disposeAll();
+    expect(retry.isErr()).toBe(true);
+    if (!retry.isErr()) {
+      throw new Error("expected retry to fail");
+    }
+    expect(retry.error).toBe(outcome.error);
+    expect(released).toEqual(["stuck", "early"]);
+    expect(scope.size).toBe(1);
+  });
+
+  it("shares one outcome across concurrent pre-aborted callers", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    let released = false;
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => {
+        released = true;
+        return Promise.resolve();
+      },
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const [first, second] = await Promise.all([
+      scope.disposeAll(controller.signal),
+      scope.disposeAll(controller.signal),
+    ]);
+    expect(first.isErr()).toBe(true);
+    expect(second.isErr()).toBe(true);
+    expect(released).toBe(false);
     expect(scope.size).toBe(1);
     expect(scope.isDisposed).toBe(false);
-    expect((await scope.disposeAll()).isOk()).toBe(true);
-    expect(released).toEqual(["stuck", "early"]);
   });
 
   it("pre-aborted signal skips disposal with the cancelled code", async () => {
@@ -190,6 +222,62 @@ describe("lifecycle", () => {
       expect(outcome.error.code).toBe("CANCELLED");
     }
     expect(released).toBe(false);
+    expect(scope.size).toBe(1);
+    expect(scope.isDisposed).toBe(false);
+    const retry = await scope.disposeAll();
+    expect(retry.isOk()).toBe(true);
+    expect(released).toBe(true);
+    expect(scope.size).toBe(0);
+    expect(scope.isDisposed).toBe(true);
+  });
+
+  it("rejects registration while a disposal run is in flight", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    const gate = new Promise<void>(() => undefined);
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => gate,
+    });
+    const controller = new AbortController();
+    const disposing = scope.disposeAll(controller.signal);
+    const late = scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => Promise.resolve(),
+    });
+    expect(late.isErr()).toBe(true);
+    expect(scope.size).toBe(1);
+    controller.abort();
+    await disposing;
+  });
+
+  it("ignores late settlement of an abandoned disposal without crashing", async () => {
+    const scope = new ResourceScope();
+    const ids = createDeterministicIdGenerator("lc");
+    let rejectLate!: (reason: Error) => void;
+    const late = new Promise<void>((_resolve, reject) => {
+      rejectLate = reject;
+    });
+    scope.register({
+      id: ids.resourceId(),
+      kind: "timer",
+      dispose: () => late,
+    });
+    const controller = new AbortController();
+    const disposing = scope.disposeAll(controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    const outcome = await disposing;
+    expect(outcome.isErr()).toBe(true);
+    rejectLate(new Error("too late"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("CANCELLED");
+    }
+    expect(scope.isDisposed).toBe(true);
     expect(scope.size).toBe(1);
   });
 
@@ -224,7 +312,8 @@ describe("lifecycle", () => {
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {
       expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
-      expect(outcome.error.message).toBe("sync failure");
+      expect(outcome.error.message).toBe("resource disposal failed");
+      expect(outcome.error.details).toEqual({ resourceId: "lc-resource-1" });
     }
   });
 

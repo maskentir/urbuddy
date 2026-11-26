@@ -1,6 +1,6 @@
+import { appError, type AppError } from "@kernel/errors";
 import { err, ok, type Result } from "neverthrow";
 
-import { appError, type AppError } from "./errors.js";
 import type { ResourceId } from "./ids.js";
 import { resourceKindSchema, type ResourceKind } from "./resources.js";
 
@@ -10,7 +10,7 @@ export interface ManagedResource {
   dispose(): Promise<void>;
 }
 
-type SettledDisposal =
+type Settlement =
   | { readonly status: "done" }
   | { readonly status: "abandoned" }
   | { readonly status: "failed"; readonly cause: unknown };
@@ -18,13 +18,8 @@ type SettledDisposal =
 async function settleDispose(
   start: () => Promise<void>,
   signal: AbortSignal | undefined,
-): Promise<SettledDisposal> {
-  let pending: Promise<void>;
-  try {
-    pending = start();
-  } catch (thrown: unknown) {
-    return { status: "failed", cause: thrown };
-  }
+): Promise<Settlement> {
+  const pending = Promise.resolve().then(start);
   if (signal === undefined) {
     try {
       await pending;
@@ -39,13 +34,13 @@ async function settleDispose(
   let onAbort: () => void = () => undefined;
   const abortGate = new Promise<{ readonly status: "abandoned" }>((resolve) => {
     onAbort = () => resolve({ status: "abandoned" });
-    signal.addEventListener("abort", onAbort, { once: true });
   });
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
     return await Promise.race([
-      pending.then(
-        (): SettledDisposal => ({ status: "done" }),
-        (thrown: unknown): SettledDisposal => ({ status: "failed", cause: thrown }),
+      pending.then<Settlement, Settlement>(
+        (): Settlement => ({ status: "done" }),
+        (thrown: unknown): Settlement => ({ status: "failed", cause: thrown }),
       ),
       abortGate,
     ]);
@@ -54,15 +49,23 @@ async function settleDispose(
   }
 }
 
-function releaseFailure(id: ResourceId, cause: unknown): AppError {
-  const message = cause instanceof Error && cause.message !== "" ? cause.message : "dispose threw";
-  return appError("RESOURCE_RELEASE_FAILED", message, { details: { resourceId: id } });
+function releaseFailure(id: ResourceId): AppError {
+  return appError("RESOURCE_RELEASE_FAILED", "resource disposal failed", {
+    details: { resourceId: id },
+  });
+}
+
+interface TrackedResource {
+  readonly resource: ManagedResource;
+  settled: boolean;
+  failed: boolean;
 }
 
 export class ResourceScope {
-  private readonly resources: ManagedResource[] = [];
+  private readonly resources: TrackedResource[] = [];
   private disposal: Promise<Result<void, AppError>> | undefined;
   private terminal: Result<void, AppError> | undefined;
+  private failure: AppError | undefined;
 
   get size(): number {
     return this.resources.length;
@@ -82,51 +85,76 @@ export class ResourceScope {
         appError("RESOURCE_ACQUIRE_FAILED", `unknown resource kind: ${String(resource.kind)}`),
       );
     }
-    this.resources.push(resource);
+    this.resources.push({ resource, settled: false, failed: false });
     return ok(undefined);
   }
 
-  disposeAll(signal?: AbortSignal): Promise<Result<void, AppError>> {
+  async disposeAll(signal?: AbortSignal): Promise<Result<void, AppError>> {
     if (this.terminal !== undefined) {
-      return Promise.resolve(this.terminal);
+      return this.terminal;
     }
     if (this.disposal !== undefined) {
       return this.disposal;
     }
-    this.disposal = this.runDisposal(signal);
-    return this.disposal;
+    const run = this.runDisposal(signal);
+    this.disposal = run;
+    try {
+      return await run;
+    } finally {
+      if (this.disposal === run) {
+        this.disposal = undefined;
+      }
+    }
   }
 
   private async runDisposal(signal: AbortSignal | undefined): Promise<Result<void, AppError>> {
-    let firstFailure: AppError | undefined;
-    while (this.resources.length > 0) {
-      const resource = this.resources[this.resources.length - 1];
-      if (resource === undefined) {
-        break;
+    /** [correctness] Yield before touching shared state so a run that completes without awaiting never looks in-flight to a concurrent caller. */
+    await Promise.resolve();
+    for (let index = this.resources.length - 1; index >= 0; index -= 1) {
+      const entry = this.resources[index];
+      if (entry === undefined || entry.settled) {
+        continue;
       }
       if (signal !== undefined && signal.aborted) {
-        firstFailure = appError("CANCELLED", "scope disposal cancelled", {
-          details: { resourceId: resource.id },
-        });
         break;
       }
-      const settled = await settleDispose(() => resource.dispose(), signal);
-      this.resources.pop();
+      const settled = await settleDispose(() => entry.resource.dispose(), signal);
+      entry.settled = true;
       if (settled.status === "abandoned") {
-        firstFailure = appError("CANCELLED", "scope disposal abandoned", {
-          details: { resourceId: resource.id },
-        });
+        entry.failed = true;
+        if (this.failure === undefined) {
+          this.failure = appError("CANCELLED", "scope disposal abandoned", {
+            details: { resourceId: entry.resource.id },
+          });
+        }
         break;
       }
-      if (settled.status === "failed" && firstFailure === undefined) {
-        firstFailure = releaseFailure(resource.id, settled.cause);
+      if (settled.status === "failed") {
+        entry.failed = true;
+        if (this.failure === undefined) {
+          this.failure = releaseFailure(entry.resource.id);
+        }
       }
     }
-    const outcome = firstFailure === undefined ? ok(undefined) : err(firstFailure);
-    if (this.resources.length === 0) {
-      this.terminal = outcome;
+    for (let index = this.resources.length - 1; index >= 0; index -= 1) {
+      const entry = this.resources[index];
+      if (entry !== undefined && entry.settled && !entry.failed) {
+        this.resources.splice(index, 1);
+      }
     }
-    this.disposal = undefined;
+    const pending = this.resources.some((entry) => !entry.settled);
+    if (this.failure !== undefined) {
+      const outcome = err(this.failure);
+      if (!pending) {
+        this.terminal = outcome;
+      }
+      return outcome;
+    }
+    if (pending) {
+      return err(appError("CANCELLED", "scope disposal cancelled"));
+    }
+    const outcome = ok(undefined);
+    this.terminal = outcome;
     return outcome;
   }
 
