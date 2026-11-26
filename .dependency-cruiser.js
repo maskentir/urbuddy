@@ -1,0 +1,82 @@
+export default {
+  forbidden: [
+    {
+      name: "no-circular",
+      severity: "error",
+      comment: "Circular imports hide lifecycle ownership; restructure instead.",
+      from: {},
+      to: { circular: true },
+    },
+    {
+      name: "not-to-unresolvable",
+      severity: "error",
+      comment: "Imports must resolve under NodeNext.",
+      from: {},
+      to: { couldNotResolve: true },
+    },
+    {
+      name: "not-to-dev",
+      severity: "error",
+      comment: "Production code must not depend on devDependencies.",
+      from: { path: "^src" },
+      to: { dependencyTypes: ["npm-dev"] },
+    },
+    {
+      name: "kernel-boundary",
+      severity: "error",
+      comment: "Kernel is the bottom layer; it imports nothing above itself.",
+      from: { path: "^src/kernel" },
+      to: { path: "^(src/modules|src/platform|src/presentation|src/bootstrap)" },
+    },
+    {
+      name: "platform-boundary",
+      severity: "error",
+      comment: "Platform wraps the outside world; it never imports domain or UI layers.",
+      from: { path: "^src/platform" },
+      to: { path: "^(src/modules|src/presentation|src/bootstrap)" },
+    },
+    {
+      name: "modules-boundary",
+      severity: "error",
+      comment: "Domain modules never import presentation, bootstrap, or platform internals.",
+      from: { path: "^src/modules" },
+      to: { path: "^(src/presentation|src/bootstrap|src/platform)" },
+    },
+    {
+      name: "modules-config-owns-itself",
+      severity: "error",
+      comment: "Configuration owns its contracts; security consumes them, never the reverse.",
+      from: { path: "^src/modules/config" },
+      to: { path: "^src/modules/security" },
+    },
+    {
+      name: "presentation-boundary",
+      severity: "error",
+      comment: "Presentation is wired only by the bootstrap composition root.",
+      from: { path: "^src/presentation" },
+      to: { path: "^src/bootstrap" },
+    },
+    {
+      name: "adapters-boundary",
+      severity: "error",
+      comment:
+        "Adapters translate vendor APIs into kernel contracts; they never import domain, UI, or composition layers.",
+      from: { path: "^src/adapters" },
+      to: { path: "^(src/modules|src/presentation|src/bootstrap)" },
+    },
+    {
+      name: "adapters-owned-by-bootstrap",
+      severity: "error",
+      comment: "Only the composition root wires adapters; no other layer reaches past them.",
+      from: { path: "^(src/kernel|src/modules|src/platform|src/presentation)" },
+      to: { path: "^src/adapters" },
+    },
+  ],
+  options: {
+    doNotFollow: { path: "node_modules" },
+    includeOnly: "^src",
+    tsConfig: { fileName: "tsconfig.json" },
+    tsPreCompilationDeps: true,
+    webpackConfig: { fileName: "webpack.cruise.cjs" },
+  },
+};

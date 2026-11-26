@@ -1,0 +1,26 @@
+name: pr-hygiene
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  body:
+    runs-on: ubuntu-latest
+    steps:
+      - name: verify-pr-body-completeness
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          missing=0
+          for heading in "## Implementation map" "## Engineering decisions" "## Test evidence" "## Security and reliability" "## Known limitations" "## Reviewer guidance"; do
+            if ! printf '%s' "$PR_BODY" | grep -qF "$heading"; then
+              echo "missing section: $heading"
+              missing=1
+            fi
+          done
+          exit $missing

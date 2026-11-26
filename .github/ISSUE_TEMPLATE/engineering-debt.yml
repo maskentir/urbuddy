@@ -1,0 +1,23 @@
+name: engineering-debt
+description: Record a shortcut that must be paid back
+labels: [debt]
+body:
+  - type: textarea
+    id: location
+    attributes:
+      label: Location
+      description: Source paths and the tracked exception or workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost of keeping it
+      description: What breaks, slows down, or becomes unsafe over time.
+    validations:
+      required: true
+  - type: textarea
+    id: payoff
+    attributes:
+      label: Payoff plan
+      description: How to remove it and how to verify the removal.
