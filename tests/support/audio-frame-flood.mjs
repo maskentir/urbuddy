@@ -32,12 +32,13 @@ function audioFrame(seq, startSample) {
 }
 
 function endFrame(seq, delivered) {
-  const payload = Buffer.alloc(26);
+  const payload = Buffer.alloc(34);
   payload.writeBigUInt64LE(BigInt(delivered), 0);
   payload.writeBigUInt64LE(BigInt(delivered), 8);
   payload.writeBigUInt64LE(0n, 16);
   payload.writeUInt16LE(0, 24);
-  return Buffer.concat([header(2, seq, 26), payload]);
+  payload.writeBigUInt64LE(BigInt(delivered * samplesPerFrame), 26);
+  return Buffer.concat([header(2, seq, 34), payload]);
 }
 
 let written = 0;

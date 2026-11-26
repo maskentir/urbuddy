@@ -61,10 +61,7 @@ function formatSummary(summary: CaptureSummary, synthetic: boolean): string[] {
       `signal=${summary.signalPresent ? "present" : "none"}`,
   ];
   if (!summary.signalPresent && !synthetic) {
-    lines.push(
-      "note: no audio signal was captured (indistinguishable from digital silence; " +
-        "if sound was playing, the macOS system-audio consent grant is missing)",
-    );
+    lines.push("note: no audio signal was captured (indistinguishable from digital silence)");
   }
   return lines;
 }
@@ -98,11 +95,14 @@ export function createCapturePort(deps: CaptureDeps): CapturePort {
                 type: "format",
                 sampleRate: format.sampleRate,
                 channels: format.channels,
+                scope: "system-wide",
               }),
             );
           } else {
             await input.output.out(
-              stripFormatting(`capture ready: ${format.sampleRate} Hz ${format.channels}ch`),
+              stripFormatting(
+                `capture ready: ${format.sampleRate} Hz ${format.channels}ch system-wide mixdown`,
+              ),
             );
           }
         },

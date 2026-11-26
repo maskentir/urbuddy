@@ -5,24 +5,10 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { appError, isAppError, type AppError } from "@kernel/errors";
-import type {
-  AudioChunk,
-  AudioFormat,
-  CaptureSource,
-  HelperEnd,
-  SourceItem,
-} from "@modules/perception/audio";
+import type { CaptureSource, SourceItem } from "@modules/perception/audio";
 import { err, ok, type Result } from "neverthrow";
 
-const FRAME_MAGIC = 0x55424431;
-const FRAME_VERSION = 1;
-const HEADER_BYTES = 20;
-const MAX_PAYLOAD_BYTES = 1_048_576;
-const FORMAT_TAG_FLOAT32_LE = 1;
-
-const KIND_FORMAT = 0;
-const KIND_AUDIO = 1;
-const KIND_END = 2;
+import { FrameDecoder } from "./protocol.js";
 
 const KNOWN_STAGES = new Set([
   "default-output",
@@ -37,112 +23,17 @@ const KNOWN_STAGES = new Set([
   "taplist-set",
   "create-ioproc",
   "start",
+  "signal",
+  "unsupported-os",
   "unsupported-platform",
 ]);
 
 const STARTUP_TIMEOUT_MS = 5_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const STOP_SIGNAL_WAIT_MS = 2_000;
 const DISPOSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BUFFERED_BYTES = 4_194_304;
 const RESUME_BYTES = 1_048_576;
-
-function readU64(view: DataView, offset: number): number {
-  const value = view.getBigUint64(offset, true);
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw appError("VALIDATION_FAILED", "audio frame counter exceeds safe range");
-  }
-  return Number(value);
-}
-
-function decodePayload(kind: number, seq: number, payload: Buffer): SourceItem {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  if (kind === KIND_FORMAT) {
-    if (payload.byteLength !== 8) {
-      throw appError("VALIDATION_FAILED", "audio format frame has an unexpected size");
-    }
-    const tag = view.getUint16(6, true);
-    if (tag !== FORMAT_TAG_FLOAT32_LE) {
-      throw appError("VALIDATION_FAILED", "audio helper reported an unsupported encoding");
-    }
-    const format: AudioFormat = {
-      sampleRate: view.getUint32(0, true),
-      channels: view.getUint16(4, true),
-    };
-    if (format.sampleRate === 0 || format.channels === 0 || format.channels > 8) {
-      throw appError("VALIDATION_FAILED", "audio helper reported an invalid format");
-    }
-    return { type: "format", seq, format };
-  }
-  if (kind === KIND_AUDIO) {
-    if (payload.byteLength < 8 || (payload.byteLength - 8) % 4 !== 0) {
-      throw appError("VALIDATION_FAILED", "audio frame payload is misaligned");
-    }
-    const startSample = readU64(view, 0);
-    const floats = new Float32Array(
-      payload.buffer.slice(payload.byteOffset + 8, payload.byteOffset + payload.byteLength),
-    );
-    const chunk: AudioChunk = { seq, startSample, samples: floats };
-    return { type: "audio", chunk };
-  }
-  if (kind === KIND_END) {
-    if (payload.byteLength !== 26) {
-      throw appError("VALIDATION_FAILED", "audio end frame has an unexpected size");
-    }
-    const reason = view.getUint16(24, true);
-    if (reason !== 0 && reason !== 1) {
-      throw appError("VALIDATION_FAILED", "audio helper reported an unknown end reason");
-    }
-    const end: HelperEnd = {
-      captured: readU64(view, 0),
-      delivered: readU64(view, 8),
-      dropped: readU64(view, 16),
-      reason: reason === 1 ? "cancelled" : "completed",
-    };
-    return { type: "end", seq, end };
-  }
-  throw appError("VALIDATION_FAILED", "audio helper sent an unknown frame kind");
-}
-
-export class FrameDecoder {
-  private pending = Buffer.alloc(0);
-
-  push(data: Buffer): SourceItem[] {
-    this.pending = Buffer.concat([this.pending, data]);
-    const items: SourceItem[] = [];
-    while (this.pending.byteLength >= HEADER_BYTES) {
-      const view = new DataView(this.pending.buffer, this.pending.byteOffset, HEADER_BYTES);
-      if (view.getUint32(0, true) !== FRAME_MAGIC) {
-        throw appError("VALIDATION_FAILED", "unrecognized audio frame");
-      }
-      if (
-        view.getUint16(4, true) !== KIND_FORMAT &&
-        view.getUint16(4, true) !== KIND_AUDIO &&
-        view.getUint16(4, true) !== KIND_END
-      ) {
-        throw appError("VALIDATION_FAILED", "audio helper sent an unknown frame kind");
-      }
-      const kind = view.getUint16(4, true);
-      if (kind !== KIND_FORMAT && kind !== KIND_AUDIO && kind !== KIND_END) {
-        throw appError("VALIDATION_FAILED", "audio helper sent an unknown frame kind");
-      }
-      if (view.getUint16(6, true) !== FRAME_VERSION) {
-        throw appError("VALIDATION_FAILED", "unsupported audio protocol version");
-      }
-      const seq = readU64(view, 8);
-      const payloadLen = view.getUint32(16, true);
-      if (payloadLen > MAX_PAYLOAD_BYTES) {
-        throw appError("VALIDATION_FAILED", "audio frame exceeds its size bound");
-      }
-      if (this.pending.byteLength < HEADER_BYTES + payloadLen) {
-        return items;
-      }
-      const payload = this.pending.subarray(HEADER_BYTES, HEADER_BYTES + payloadLen);
-      items.push(decodePayload(kind, seq, payload));
-      this.pending = this.pending.subarray(HEADER_BYTES + payloadLen);
-    }
-    return items;
-  }
-}
 
 export function resolveHelperPath(
   env: Readonly<Record<string, string | undefined>>,
@@ -194,6 +85,8 @@ export interface SpawnAudioSourceInput {
   readonly helperPath: string;
   readonly syntheticFrames?: number;
   readonly maxBufferedBytes?: number;
+  readonly ringSlots?: number;
+  readonly shutdownTimeoutMs?: number;
   readonly platformName?: string;
 }
 
@@ -230,9 +123,27 @@ export function spawnAudioSource(input: SpawnAudioSourceInput): Result<CaptureSo
   if (!Number.isInteger(maxBuffered) || maxBuffered < 65_536) {
     return err(appError("VALIDATION_FAILED", "capture buffer bound is out of range"));
   }
+  const shutdownTimeoutMs = input.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  if (
+    !Number.isInteger(shutdownTimeoutMs) ||
+    shutdownTimeoutMs < 500 ||
+    shutdownTimeoutMs > 30000
+  ) {
+    return err(appError("VALIDATION_FAILED", "capture shutdown bound is out of range"));
+  }
+  const ringSlots = input.ringSlots;
+  if (
+    ringSlots !== undefined &&
+    (!Number.isInteger(ringSlots) || ringSlots < 1 || ringSlots > 1024)
+  ) {
+    return err(appError("VALIDATION_FAILED", "helper ring size is out of range"));
+  }
   const args = ["--chunk-frames", "2048"];
   if (synthetic > 0) {
     args.push("--synthetic-frames", String(synthetic));
+  }
+  if (ringSlots !== undefined) {
+    args.push("--ring-slots", String(ringSlots));
   }
   const validated = checkExecutable(input.helperPath);
   if (validated.isErr()) {
@@ -240,7 +151,7 @@ export function spawnAudioSource(input: SpawnAudioSourceInput): Result<CaptureSo
   }
   try {
     const child = spawn(input.helperPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-    return ok(new ChildCaptureSource(child, maxBuffered));
+    return ok(new ChildCaptureSource(child, maxBuffered, shutdownTimeoutMs));
   } catch (thrown: unknown) {
     return err(
       isAppError(thrown)
@@ -261,7 +172,10 @@ export class ChildCaptureSource implements CaptureSource {
       }
     | undefined;
   private fatal: AppError | undefined;
+  private protocolBroken: AppError | undefined;
   private streamEnded = false;
+  private endWaiters: Array<() => void> = [];
+  private sawEnd = false;
   private childExited: number | null | undefined;
   private stage: string | undefined;
   private stderrTail = "";
@@ -271,10 +185,12 @@ export class ChildCaptureSource implements CaptureSource {
   private stopSent = false;
   private disposePromise: Promise<Result<void, AppError>> | undefined;
   private readonly startupTimer: ReturnType<typeof setTimeout>;
+  private shutdownTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly child: ChildProcess,
     private readonly maxBuffered: number,
+    private readonly shutdownTimeoutMs: number = DEFAULT_SHUTDOWN_TIMEOUT_MS,
   ) {
     this.startupTimer = setTimeout(() => {
       if (!this.ready) {
@@ -284,6 +200,7 @@ export class ChildCaptureSource implements CaptureSource {
     child.stdout?.on("data", (data: Buffer) => this.onData(data));
     child.stdout?.on("end", () => this.onStreamEnd());
     child.stdout?.on("error", () => this.onStreamEnd());
+    child.stdout?.on("close", () => this.onStreamEnd());
     child.stderr?.on("data", (data: Buffer) => this.onStderr(data));
     child.on("error", () => {
       this.fail(appError("RESOURCE_ACQUIRE_FAILED", "audio helper failed to start"));
@@ -315,6 +232,21 @@ export class ChildCaptureSource implements CaptureSource {
     }
   }
 
+  private markEnded(): void {
+    this.sawEnd = true;
+    if (this.shutdownTimer !== undefined) {
+      clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = undefined;
+    }
+  }
+
+  private breakProtocol(message: string): void {
+    if (this.protocolBroken === undefined) {
+      this.protocolBroken = appError("VALIDATION_FAILED", message);
+    }
+    this.fail(this.protocolBroken);
+  }
+
   private onStderr(data: Buffer): void {
     const text = data.toString("utf8");
     this.stderrTail = `${this.stderrTail}${text}`.slice(-2048);
@@ -327,11 +259,22 @@ export class ChildCaptureSource implements CaptureSource {
   }
 
   private onData(data: Buffer): void {
+    if (this.sawEnd) {
+      this.breakProtocol("audio helper sent data after its end frame");
+      return;
+    }
     try {
       for (const item of this.decoder.push(data)) {
+        if (this.sawEnd) {
+          this.breakProtocol("audio helper sent data after its end frame");
+          return;
+        }
         this.markReady();
         if (item.type === "audio") {
           this.queuedBytes += item.chunk.samples.byteLength;
+        }
+        if (item.type === "end") {
+          this.markEnded();
         }
         this.queue.push(item);
       }
@@ -350,7 +293,33 @@ export class ChildCaptureSource implements CaptureSource {
 
   private onStreamEnd(): void {
     this.streamEnded = true;
+    if (this.sawEnd && this.decoder.hasPending) {
+      this.breakProtocol("audio helper left a truncated frame after its end frame");
+    }
+    for (const wake of this.endWaiters.splice(0)) {
+      wake();
+    }
     this.drain();
+  }
+
+  private awaitStreamEnded(timeoutMs: number): Promise<void> {
+    if (this.streamEnded) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const at = this.endWaiters.indexOf(done);
+        if (at >= 0) {
+          this.endWaiters.splice(at, 1);
+        }
+        resolve();
+      }, timeoutMs);
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      this.endWaiters.push(done);
+    });
   }
 
   private fail(error: AppError): void {
@@ -439,6 +408,12 @@ export class ChildCaptureSource implements CaptureSource {
     }
     this.stopSent = true;
     this.child.kill("SIGTERM");
+    if (this.shutdownTimer === undefined && !this.sawEnd) {
+      this.shutdownTimer = setTimeout(() => {
+        this.shutdownTimer = undefined;
+        this.fail(appError("RESOURCE_RELEASE_FAILED", "audio helper did not stop"));
+      }, this.shutdownTimeoutMs);
+    }
   }
 
   dispose(): Promise<Result<void, AppError>> {
@@ -448,22 +423,35 @@ export class ChildCaptureSource implements CaptureSource {
 
   private async terminate(): Promise<Result<void, AppError>> {
     clearTimeout(this.startupTimer);
+    if (this.shutdownTimer !== undefined) {
+      clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = undefined;
+    }
     this.child.stdout?.resume();
-    if (this.childExited === undefined) {
-      if (!this.stopSent) {
-        this.stopSent = true;
-        this.child.kill("SIGTERM");
-      }
-      const closed = await this.awaitClose(STOP_SIGNAL_WAIT_MS);
-      if (!closed) {
-        this.child.kill("SIGKILL");
-        const killed = await this.awaitClose(DISPOSE_TIMEOUT_MS - STOP_SIGNAL_WAIT_MS);
-        if (!killed) {
-          return err(appError("RESOURCE_RELEASE_FAILED", "audio helper did not terminate"));
-        }
-      }
+    await this.forceReap();
+    await this.awaitStreamEnded(STOP_SIGNAL_WAIT_MS);
+    if (this.protocolBroken !== undefined) {
+      return err(this.protocolBroken);
+    }
+    if (!this.sawEnd && this.childExited === undefined) {
+      return err(appError("RESOURCE_RELEASE_FAILED", "audio helper did not terminate"));
     }
     return ok(undefined);
+  }
+
+  private async forceReap(): Promise<void> {
+    if (this.childExited !== undefined) {
+      return;
+    }
+    if (!this.stopSent) {
+      this.stopSent = true;
+      this.child.kill("SIGTERM");
+    }
+    const closed = await this.awaitClose(STOP_SIGNAL_WAIT_MS);
+    if (!closed && this.childExited === undefined) {
+      this.child.kill("SIGKILL");
+      await this.awaitClose(DISPOSE_TIMEOUT_MS - STOP_SIGNAL_WAIT_MS);
+    }
   }
 
   private awaitClose(timeoutMs: number): Promise<boolean> {

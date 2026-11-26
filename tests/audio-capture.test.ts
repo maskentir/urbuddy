@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,35 @@ import { err, ok, type Result } from "neverthrow";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+function writeSineFixture(path: string, seconds = 5, frequency = 440, sampleRate = 48000): void {
+  const frames = seconds * sampleRate;
+  const data = Buffer.alloc(44 + frames * 2);
+  data.write("RIFF", 0);
+  data.writeUInt32LE(36 + frames * 2, 4);
+  data.write("WAVE", 8);
+  data.write("fmt ", 12);
+  data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20);
+  data.writeUInt16LE(1, 22);
+  data.writeUInt32LE(sampleRate, 24);
+  data.writeUInt32LE(sampleRate * 2, 28);
+  data.writeUInt16LE(2, 32);
+  data.writeUInt16LE(16, 34);
+  data.write("data", 36);
+  data.writeUInt32LE(frames * 2, 40);
+  for (let i = 0; i < frames; i += 1) {
+    data.writeInt16LE(
+      Math.round(0.5 * 32767 * Math.sin((2 * Math.PI * frequency * i) / sampleRate)),
+      44 + i * 2,
+    );
+  }
+  writeFileSync(path, data);
+}
 const floodScript = join(here, "support", "audio-frame-flood.mjs");
+const ignoreSigtermScript = join(here, "support", "audio-ignore-sigterm.mjs");
+const truncatedTailScript = join(here, "support", "audio-truncated-tail.mjs");
+const abruptEndScript = join(here, "support", "audio-abrupt-end.mjs");
 
 function formatItem(): SourceItem {
   return { type: "format", seq: 0, format: { sampleRate: 48000, channels: 1 } };
@@ -37,11 +65,11 @@ function audioItem(seq: number, startSample: number, samples: number[]): SourceI
   return { type: "audio", chunk: { seq, startSample, samples: new Float32Array(samples) } };
 }
 
-function endItem(seq: number): SourceItem {
+function endItem(seq: number, sourceFrames: number, delivered: number): SourceItem {
   return {
     type: "end",
     seq,
-    end: { captured: 2, delivered: 2, dropped: 0, reason: "completed" },
+    end: { captured: 2, delivered, dropped: 0, reason: "completed", sourceFrames },
   };
 }
 
@@ -58,6 +86,7 @@ function controllable(): Controllable {
   let closed = false;
   let stopped = false;
   let audioSeen = 0;
+  let samplesSeen = 0;
   let disposeError: AppError | undefined;
   let notified: (() => void) | undefined;
   const wake = (): void => {
@@ -86,7 +115,7 @@ function controllable(): Controllable {
       },
       async stop(): Promise<void> {
         stopped = true;
-        queue.push(endItem(audioSeen + 1));
+        queue.push(endItem(audioSeen + 1, samplesSeen, audioSeen));
         closed = true;
         wake();
       },
@@ -100,6 +129,7 @@ function controllable(): Controllable {
     push: (item: SourceItem): void => {
       if (item.type === "audio") {
         audioSeen += 1;
+        samplesSeen += item.chunk.samples.length;
       }
       queue.push(item);
       wake();
@@ -144,7 +174,7 @@ describe("capture orchestration", () => {
         formatItem(),
         audioItem(1, 0, [0.5, -0.5, 0, 0]),
         audioItem(2, 4, [0.25, 0.25, 0.25, 0.25]),
-        endItem(3),
+        endItem(3, 8, 2),
       ]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
@@ -170,7 +200,7 @@ describe("capture orchestration", () => {
         formatItem(),
         audioItem(1, 0, [0.5, 0.5]),
         audioItem(2, 8, [0.5, 0.5]),
-        endItem(3),
+        endItem(3, 10, 2),
       ]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
@@ -184,13 +214,45 @@ describe("capture orchestration", () => {
     expect(gapRanges).toEqual([{ fromSample: 2, toSample: 8 }]);
   });
 
+  it("reports trailing loss detected at the end acknowledgement", async () => {
+    const outcome = await runCaptureSession({
+      source: sourceFrom([formatItem(), audioItem(1, 0, [0.5, 0.5]), endItem(2, 5, 1)]),
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+    });
+    expect(outcome.isOk()).toBe(true);
+    if (outcome.isErr()) {
+      throw new Error("trailing loss must complete with a gap");
+    }
+    expect(outcome.value.gaps).toBe(1);
+    expect(outcome.value.gapRanges).toEqual([{ fromSample: 2, toSample: 5 }]);
+  });
+
+  it("rejects a delivery count that contradicts received audio", async () => {
+    const outcome = await runCaptureSession({
+      source: sourceFrom([formatItem(), audioItem(1, 0, [0.5]), endItem(2, 1, 9)]),
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+    });
+    expect(outcome.isErr()).toBe(true);
+  });
+
+  it("rejects a source clock that contradicts received audio", async () => {
+    const outcome = await runCaptureSession({
+      source: sourceFrom([formatItem(), audioItem(1, 0, [0.5, 0.5]), endItem(2, 1, 1)]),
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+    });
+    expect(outcome.isErr()).toBe(true);
+  });
+
   it("fails closed on overlapping audio", async () => {
     const outcome = await runCaptureSession({
       source: sourceFrom([
         formatItem(),
         audioItem(1, 0, [0.5, 0.5]),
         audioItem(2, 1, [0.5, 0.5]),
-        endItem(3),
+        endItem(3, 4, 2),
       ]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
@@ -208,7 +270,7 @@ describe("capture orchestration", () => {
         formatItem(),
         audioItem(1, 0, [0.5]),
         audioItem(3, 1, [0.5]),
-        endItem(4),
+        endItem(4, 2, 2),
       ]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
@@ -218,7 +280,7 @@ describe("capture orchestration", () => {
 
   it("rejects an end frame that breaks sequence continuity", async () => {
     const outcome = await runCaptureSession({
-      source: sourceFrom([formatItem(), audioItem(1, 0, [0.5]), endItem(9)]),
+      source: sourceFrom([formatItem(), audioItem(1, 0, [0.5]), endItem(9, 1, 1)]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
     });
@@ -227,7 +289,7 @@ describe("capture orchestration", () => {
 
   it("rejects audio before its format", async () => {
     const outcome = await runCaptureSession({
-      source: sourceFrom([audioItem(1, 0, [0.5]), endItem(2)]),
+      source: sourceFrom([audioItem(1, 0, [0.5]), endItem(2, 1, 1)]),
       signal: new AbortController().signal,
       clock: fixedClock(0),
     });
@@ -275,7 +337,7 @@ describe("capture orchestration", () => {
     const held = controllable();
     held.push(formatItem());
     held.push(audioItem(1, 0, [0]));
-    held.push(endItem(2));
+    held.push(endItem(2, 1, 1));
     held.finish();
     held.setDisposeError(appError("RESOURCE_RELEASE_FAILED", "cleanup failed"));
     const outcome = await runCaptureSession({
@@ -320,7 +382,7 @@ describe("capture orchestration", () => {
     held.push(audioItem(2, 1, [0.5]));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(stats).toHaveLength(1);
-    held.push(endItem(3));
+    held.push(endItem(3, 2, 2));
     held.finish();
     const outcome = await outcomePromise;
     expect(outcome.isOk()).toBe(true);
@@ -484,7 +546,9 @@ describe("capture presentation", () => {
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes("signal=none"))).toBe(true);
-    expect(lines.some((line) => line.includes("consent grant is missing"))).toBe(true);
+    expect(lines.some((line) => line.includes("indistinguishable from digital silence"))).toBe(
+      true,
+    );
   });
 
   it("emits one compact JSON object per line in json mode", async () => {
@@ -650,4 +714,148 @@ describe("capture backpressure", () => {
     const disposed = await source.dispose();
     expect(disposed.isOk()).toBe(true);
   }, 15000);
+});
+
+describe("capture shutdown and protocol integrity", () => {
+  function launchScript(script: string): { child: ChildProcess } {
+    const child = spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "pipe"] });
+    child.stderr?.resume();
+    return { child };
+  }
+
+  it("fails closed when the helper ignores SIGTERM", async () => {
+    const { child } = launchScript(ignoreSigtermScript);
+    const source = new ChildCaptureSource(child, 65_536, 1_000);
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+      durationMs: 3000,
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("an unresponsive helper must fail");
+    }
+    expect(outcome.error.code).toBe("RESOURCE_RELEASE_FAILED");
+    expect(outcome.error.message).toContain("did not stop");
+  }, 20000);
+
+  it("rejects trailing bytes after the end acknowledgement", async () => {
+    const { child } = launchScript(truncatedTailScript);
+    const source = new ChildCaptureSource(child, 65_536);
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+      durationMs: 10000,
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isOk()) {
+      throw new Error("trailing bytes must fail");
+    }
+    expect(outcome.error.code).toBe("VALIDATION_FAILED");
+  }, 20000);
+
+  it("accepts complete evidence when the helper exits abnormally after its end", async () => {
+    const { child } = launchScript(abruptEndScript);
+    const source = new ChildCaptureSource(child, 65_536);
+    const outcome = await runCaptureSession({
+      source,
+      signal: new AbortController().signal,
+      clock: fixedClock(0),
+      durationMs: 10000,
+    });
+    expect(outcome.isOk()).toBe(true);
+    if (outcome.isErr()) {
+      throw new Error("post-end exit must not invalidate acknowledged evidence");
+    }
+    expect(outcome.value.receivedFrames).toBe(1);
+  }, 20000);
+});
+
+describe.runIf(helperAvailable)("native capture verification", () => {
+  function helperPath(): string {
+    const resolved = resolveBundledHelperPath({});
+    if (resolved.isErr()) {
+      throw new Error("helper must resolve on this machine");
+    }
+    return resolved.value;
+  }
+
+  it("starts and stops real capture repeatedly", async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const spawned = spawnAudioSource({ helperPath: helperPath() });
+      if (spawned.isErr()) {
+        throw new Error("real helper spawn must succeed");
+      }
+      const outcome = await runCaptureSession({
+        source: spawned.value,
+        signal: new AbortController().signal,
+        clock: fixedClock(0),
+        durationMs: 2000,
+      });
+      expect(outcome.isOk()).toBe(true);
+      if (outcome.isErr()) {
+        throw new Error("repeated real capture must complete");
+      }
+      expect(outcome.value.format).toEqual({ sampleRate: 48000, channels: 2 });
+    }
+  }, 30000);
+
+  it("propagates native ring overflow into reported gaps", async (ctx) => {
+    const sinePath = join(tmpdir(), `urbuddy-overflow-${Date.now()}.wav`);
+    writeSineFixture(sinePath, 15);
+    const player = spawn("afplay", [sinePath], { stdio: "ignore" });
+    const playerStarted = await new Promise<boolean>((resolve) => {
+      player.once("spawn", () => resolve(true));
+      player.once("error", () => resolve(false));
+    });
+    if (!playerStarted) {
+      rmSync(sinePath, { force: true });
+      ctx.skip();
+      return;
+    }
+    try {
+      const spawned = spawnAudioSource({
+        helperPath: helperPath(),
+        ringSlots: 2,
+        maxBufferedBytes: 131072,
+      });
+      if (spawned.isErr()) {
+        throw new Error("real helper spawn must succeed");
+      }
+      const raw = spawned.value;
+      const slowSource: CaptureSource = {
+        async *items(signal: AbortSignal): AsyncIterable<SourceItem> {
+          for await (const item of raw.items(signal)) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            yield item;
+          }
+        },
+        async stop(): Promise<void> {
+          await raw.stop();
+        },
+        dispose: () => raw.dispose(),
+      };
+      const outcome = await runCaptureSession({
+        source: slowSource,
+        signal: new AbortController().signal,
+        clock: fixedClock(0),
+        durationMs: 6000,
+      });
+      expect(outcome.isOk()).toBe(true);
+      if (outcome.isErr()) {
+        throw new Error("overflowed run must complete");
+      }
+      if (!outcome.value.signalPresent) {
+        ctx.skip();
+        return;
+      }
+      expect(outcome.value.droppedHelper).toBeGreaterThan(0);
+      expect(outcome.value.gaps).toBeGreaterThan(0);
+    } finally {
+      player.kill();
+      rmSync(sinePath, { force: true });
+    }
+  }, 30000);
 });

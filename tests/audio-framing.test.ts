@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { FrameDecoder } from "@adapters/audio/capture-source";
+import { FrameDecoder } from "@adapters/audio/protocol";
 import { isAppError } from "@kernel/errors";
 import { describe, expect, it } from "vitest";
 
@@ -42,12 +42,19 @@ function audioPayload(startSample: bigint, samples: number): Buffer {
   return payload;
 }
 
-function endPayload(captured = 1n, delivered = 1n, dropped = 0n, reason = 0): Buffer {
-  const payload = Buffer.alloc(26);
+function endPayload(
+  captured = 1n,
+  delivered = 1n,
+  dropped = 0n,
+  reason = 0,
+  sourceFrames = 1n,
+): Buffer {
+  const payload = Buffer.alloc(34);
   payload.writeBigUInt64LE(captured, 0);
   payload.writeBigUInt64LE(delivered, 8);
   payload.writeBigUInt64LE(dropped, 16);
   payload.writeUInt16LE(reason, 24);
+  payload.writeBigUInt64LE(sourceFrames, 26);
   return payload;
 }
 
@@ -97,7 +104,7 @@ describe("audio frame decoding", () => {
     expect(last).toEqual({
       type: "end",
       seq: 6,
-      end: { captured: 5, delivered: 5, dropped: 0, reason: "completed" },
+      end: { captured: 5, delivered: 5, dropped: 0, reason: "completed", sourceFrames: 1280 },
     });
   });
 
@@ -117,7 +124,7 @@ describe("audio frame decoding", () => {
     const end = endPayload();
     const decoder = new FrameDecoder();
     const items = decoder.push(
-      Buffer.concat([header(1, 1n, audio.byteLength), audio, header(2, 2n, 26), end]),
+      Buffer.concat([header(1, 1n, audio.byteLength), audio, header(2, 2n, end.byteLength), end]),
     );
     expect(items.map((item) => item.type)).toEqual(["audio", "end"]);
   });
@@ -158,6 +165,13 @@ describe("audio frame decoding", () => {
 
   it("rejects a misaligned audio payload", () => {
     const bad = Buffer.concat([header(1, 1n, 10), Buffer.alloc(10)]);
+    expectFailure(bad, "VALIDATION_FAILED");
+  });
+
+  it("rejects non-finite samples", () => {
+    const payload = audioPayload(0n, 4);
+    payload.writeFloatLE(Number.POSITIVE_INFINITY, 8);
+    const bad = Buffer.concat([header(1, 1n, payload.byteLength), payload]);
     expectFailure(bad, "VALIDATION_FAILED");
   });
 

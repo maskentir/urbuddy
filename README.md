@@ -166,9 +166,9 @@ of the same logical operation.
 Audio capture is opt-in per run: `capture --duration 30 --allow-child`
 runs the native helper (`native/audio-capture-macos`, macOS only)
 through the perception runtime with bounded buffering and explicit
-gap accounting. Real system audio additionally requires the macOS
-consent grant, approved in a GUI session; without it the run reports
-no signal instead of pretending silence. `--synthetic-frames N`
+gap accounting. The helper captures system-wide mixdown audio;
+without audible content the run reports no signal instead of
+pretending silence. `--synthetic-frames N`
 exercises the same transport deterministically for tests and is
 always labeled as a transport test.
 

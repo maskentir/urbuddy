@@ -30,25 +30,25 @@ Status values: `selected` (direction locked, not yet proven),
 `implemented` (in tree), `verified` (executed evidence),
 `qualified` (production gate passed).
 
-| Area                   | Selection                                                                              | Status                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Runtime                | Node.js 24, strict TypeScript, pnpm, NodeNext ESM                                      | implemented, verified                                         |
-| Cancellation lifecycle | `AbortSignal`, `ResourceScope`, bounded disposal                                       | implemented, verified                                         |
-| Streaming pipeline     | Native streams, async iterables, backpressure                                          | selected                                                      |
-| Audio capture          | Swift macOS Core Audio Tap; ScreenCaptureKit only as explicitly authorized alternative | implemented (transport verified; content gated — see ADR-005) |
-| Primary STT            | Muse                                                                                   | selected                                                      |
-| Secondary STT          | Soniox as an explicitly selected mode, never a silent fallback                         | selected                                                      |
-| Language intelligence  | LangChain.js model gateway                                                             | selected                                                      |
-| Contextual reasoning   | GPT-family model; exact callable model ID must be validated before use                 | selected                                                      |
-| Stateful orchestration | LangGraph.js, supervisory only, outside the real-time hot path                         | selected                                                      |
-| Persistence            | SQLite WAL, better-sqlite3, Drizzle, transactional outbox (FTS5 deferred)              | implemented (replay evidence), verified                       |
-| Durable processing     | SQLite transactional outbox, not a distributed queue                                   | implemented, verified                                         |
-| Personal memory graph  | Graphiti + embedded FalkorDB Lite, derived and rebuildable                             | selected                                                      |
-| Learning               | ts-fsrs                                                                                | selected                                                      |
-| Interface              | Ink, React, Commander                                                                  | implemented, verified                                         |
-| Evaluation             | DeepEval, COMET, chrF, human-calibrated references                                     | selected                                                      |
-| Observability          | Pino, local OpenTelemetry, no remote exporters by default                              | implemented (Pino), selected (OTel)                           |
-| Quality toolchain      | TypeScript, ESLint, Prettier, dependency-cruiser, Knip, Vitest                         | implemented, verified                                         |
+| Area                   | Selection                                                                              | Status                                                                                                 |
+| ---------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Runtime                | Node.js 24, strict TypeScript, pnpm, NodeNext ESM                                      | implemented, verified                                                                                  |
+| Cancellation lifecycle | `AbortSignal`, `ResourceScope`, bounded disposal                                       | implemented, verified                                                                                  |
+| Streaming pipeline     | Native streams, async iterables, backpressure                                          | selected                                                                                               |
+| Audio capture          | Swift macOS Core Audio Tap; ScreenCaptureKit only as explicitly authorized alternative | implemented (framed IPC transport, continuity accounting, live 440 Hz playback verified — see ADR-005) |
+| Primary STT            | Muse                                                                                   | selected                                                                                               |
+| Secondary STT          | Soniox as an explicitly selected mode, never a silent fallback                         | selected                                                                                               |
+| Language intelligence  | LangChain.js model gateway                                                             | selected                                                                                               |
+| Contextual reasoning   | GPT-family model; exact callable model ID must be validated before use                 | selected                                                                                               |
+| Stateful orchestration | LangGraph.js, supervisory only, outside the real-time hot path                         | selected                                                                                               |
+| Persistence            | SQLite WAL, better-sqlite3, Drizzle, transactional outbox (FTS5 deferred)              | implemented (replay evidence), verified                                                                |
+| Durable processing     | SQLite transactional outbox, not a distributed queue                                   | implemented, verified                                                                                  |
+| Personal memory graph  | Graphiti + embedded FalkorDB Lite, derived and rebuildable                             | selected                                                                                               |
+| Learning               | ts-fsrs                                                                                | selected                                                                                               |
+| Interface              | Ink, React, Commander                                                                  | implemented, verified                                                                                  |
+| Evaluation             | DeepEval, COMET, chrF, human-calibrated references                                     | selected                                                                                               |
+| Observability          | Pino, local OpenTelemetry, no remote exporters by default                              | implemented (Pino), selected (OTel)                                                                    |
+| Quality toolchain      | TypeScript, ESLint, Prettier, dependency-cruiser, Knip, Vitest                         | implemented, verified                                                                                  |
 
 Selected is not qualified. No technology counts as production-ready
 because it appears in this table; qualification requires executed

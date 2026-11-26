@@ -18,6 +18,7 @@ export interface HelperEnd {
   readonly delivered: number;
   readonly dropped: number;
   readonly reason: "completed" | "cancelled";
+  readonly sourceFrames: number;
 }
 
 export type SourceItem =
@@ -131,6 +132,7 @@ async function settleCapture(
   let audioCount = 0;
   let expectedSample = 0;
   let receivedSamples = 0;
+  let receivedFrames = 0;
   let sumSq = 0;
   let peak = 0;
   let signalPresent = false;
@@ -205,6 +207,7 @@ async function settleCapture(
         sumSq += value * value;
       }
       receivedSamples += item.chunk.samples.length;
+      receivedFrames += perChannel;
       expectedSample += perChannel;
       await emitStats();
     }
@@ -217,6 +220,20 @@ async function settleCapture(
   }
   if (helper === undefined) {
     return err(appError("VALIDATION_FAILED", "capture ended without helper acknowledgement"));
+  }
+  if (helper.delivered !== audioCount) {
+    return err(appError("VALIDATION_FAILED", "helper delivery count contradicts received audio"));
+  }
+  let accounted = receivedFrames;
+  for (const gap of gaps) {
+    accounted += gap.toSample - gap.fromSample;
+  }
+  const residual = helper.sourceFrames - accounted;
+  if (residual < 0) {
+    return err(appError("VALIDATION_FAILED", "helper source clock contradicts received audio"));
+  }
+  if (residual > 0) {
+    gaps.push({ fromSample: expectedSample, toSample: expectedSample + residual });
   }
   return ok({
     format,
