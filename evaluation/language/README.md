@@ -35,13 +35,25 @@ on the reviewed corpus. Report noncritical fluency concerns separately.
 
 ## Live qualification status
 
-The one authorized run against OpenAI GPT-6 Luna and corpus v3 stopped at
+The first authorized run against OpenAI GPT-6 Luna and corpus v3 stopped at
 `neg-001`. One local invocation started and exit status was 1. No valid
 completion or usage metadata was captured. The retained diagnostic was
 `provider failure (INTERNAL)`. HTTP status, error code, and request ID
 were unavailable, so the original cause and any billed cost remain
-unknown. No semantic case was scored. The previous authorization is consumed.
-Any later attempt requires fresh owner authorization.
+unknown.
+
+The second authorized attempt ran on
+`c44155b3c482f9ca6ad192f9cec615b13cb128cb` and exited 0. It published all
+16 finals across 15 cases, including the context utterance. The semantic
+gate failed on certificate rotation, the inclusive noon deadline, and
+permission to test the API. Human bilingual sign-off is pending. The
+provider reported 3,824 input and 388 output tokens. The full-response
+median was 1,375 ms across 16 invocations, and the nearest-rank p95 was
+2,919 ms. These are transcript-only measurements. All 16 exceeded
+the 600 ms delay at which the offline scenarios starved previews.
+
+Both authorizations are consumed. Any later attempt requires fresh owner
+authorization.
 
 The existing runner fixes corpus v3, the production destination, Luna with
 `reasoning_effort: none`, zero retries, up to 16 invocations, and up to
@@ -61,9 +73,9 @@ pnpm build
 umask 077
 mkdir -p evaluation/language/results
 node tooling/evaluate-translation.mjs --env-file .env --live --allow-egress \
-  > evaluation/language/results/luna-synthetic-next.ndjson \
-  2> evaluation/language/results/luna-synthetic-next.stderr
-printf '%s\n' "$?" > evaluation/language/results/luna-synthetic-next.exit
+  > evaluation/language/results/luna-synthetic-future.ndjson \
+  2> evaluation/language/results/luna-synthetic-future.stderr
+printf '%s\n' "$?" > evaluation/language/results/luna-synthetic-future.exit
 ```
 
 Record the exact commit, Node version, model, prompt and corpus versions,

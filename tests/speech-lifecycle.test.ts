@@ -810,19 +810,23 @@ describe("termination and reconnect ownership", () => {
     if (opened.isErr()) {
       return;
     }
-    await opened.value.endInput();
-    let failure: unknown;
-    const seen: string[] = [];
     try {
-      for await (const event of opened.value.events()) {
-        seen.push(event.type);
-      }
-    } catch (thrown: unknown) {
-      failure = thrown;
+      expect((await opened.value.endInput()).isOk()).toBe(true);
+      await server.closed;
+      const seen: string[] = [];
+      const consume = async (): Promise<void> => {
+        for await (const event of opened.value.events()) {
+          seen.push(event.type);
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({
+        code: "INTERNAL",
+        message: "speech event queue exceeded its bound",
+      });
+      expect(seen).toContain("progress");
+    } finally {
+      await opened.value.terminate();
     }
-    expect(failure).toBeDefined();
-    expect(seen).toContain("progress");
-    await opened.value.terminate();
   });
 
   it("bounds reconnect attempts and then fails", async () => {
