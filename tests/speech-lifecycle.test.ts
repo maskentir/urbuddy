@@ -1555,6 +1555,7 @@ describe("transcription continuity and cleanup", () => {
     const errLines: string[] = [];
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
+      loopbackEndpoint: false,
       createProvider: () => {
         const session = new FakeSpeechSession(async function* () {});
         return ok({
@@ -1584,5 +1585,40 @@ describe("transcription continuity and cleanup", () => {
     expect(outcome.isOk()).toBe(true);
     expect(errLines.some((line) => line.includes("disclosure"))).toBe(true);
     expect(lines.every((line) => !line.includes("disclosure"))).toBe(true);
+  });
+
+  it("refuses live capture with a loopback test endpoint without starting capture", async () => {
+    let spawned = false;
+    const port = createTranscribePort({
+      clock: { now: () => 0, isoNow: () => "" },
+      loopbackEndpoint: true,
+      createProvider: () => {
+        const session = new FakeSpeechSession(async function* () {});
+        return ok({
+          providerId: "test",
+          modelId: "test",
+          openSession: async () => ok(session),
+        });
+      },
+      spawnCapture: () => {
+        spawned = true;
+        return ok(trackedSource([formatItem(), endItem(1, 0)]));
+      },
+    });
+    const outcome = await port({
+      durationMs: 30_000,
+      mode: "endpointing",
+      keywords: [],
+      json: false,
+      signal: new AbortController().signal,
+      output: { out: () => {}, errLine: () => {} },
+      env: {},
+    });
+    expect(outcome.isErr()).toBe(true);
+    if (outcome.isErr()) {
+      expect(outcome.error.code).toBe("CONFIG_INVALID");
+      expect(outcome.error.message).toContain("loopback test endpoint");
+    }
+    expect(spawned).toBe(false);
   });
 });

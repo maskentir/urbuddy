@@ -30,6 +30,7 @@ export type TranscribePort = (
 
 export interface TranscribeDeps {
   readonly clock: Clock;
+  readonly loopbackEndpoint: boolean;
   readonly createProvider?: (
     env: Readonly<Record<string, string | undefined>>,
   ) => Result<SpeechProvider, AppError>;
@@ -68,6 +69,11 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           "CONFIG_INVALID",
           "transcription requires network egress authorization (--allow-egress)",
         ),
+      );
+    }
+    if (input.file === undefined && deps.loopbackEndpoint) {
+      return err(
+        appError("CONFIG_INVALID", "live capture is not permitted with a loopback test endpoint"),
       );
     }
     if (input.file === undefined && deps.spawnCapture === undefined) {

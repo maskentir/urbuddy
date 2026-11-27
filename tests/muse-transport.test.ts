@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openWavSource } from "@adapters/audio/wav-source";
-import { createMuseProvider, resolveMuseEndpoint } from "@adapters/speech/muse";
+import { createMuseProvider, isLoopbackEndpoint, resolveMuseEndpoint } from "@adapters/speech/muse";
 import type { CaptureSource, SourceItem } from "@modules/perception/audio";
 import { runTranscription, type TranscriptEvent } from "@modules/perception/speech";
 import { createTranscribePort } from "@presentation/transcribe";
@@ -374,7 +374,10 @@ describe("Muse transport (local server)", () => {
 
   it("denies transcription without egress wiring and never connects", async () => {
     server = new TestServer(happyScript());
-    const port = createTranscribePort({ clock: { now: () => 0, isoNow: () => "" } });
+    const port = createTranscribePort({
+      clock: { now: () => 0, isoNow: () => "" },
+      loopbackEndpoint: false,
+    });
     const outcome = await port({
       file: "input.wav",
       mode: "endpointing",
@@ -425,6 +428,18 @@ describe("resolveMuseEndpoint", () => {
         expect(resolved.error.code).toBe("VALIDATION_FAILED");
       }
     }
+  });
+
+  it("distinguishes loopback test endpoints from the production endpoint", () => {
+    for (const raw of [undefined, "", "   "] as const) {
+      expect(isLoopbackEndpoint(raw)).toBe(false);
+    }
+    expect(isLoopbackEndpoint("ws://127.0.0.1:18923")).toBe(true);
+    expect(isLoopbackEndpoint("ws://localhost:18923")).toBe(true);
+    expect(isLoopbackEndpoint("wss://127.0.0.1:1")).toBe(true);
+    expect(isLoopbackEndpoint("wss://evil.example.com/asr")).toBe(false);
+    expect(isLoopbackEndpoint("ws://evil.example.com/asr")).toBe(false);
+    expect(isLoopbackEndpoint("::not-a-url::")).toBe(false);
   });
 });
 

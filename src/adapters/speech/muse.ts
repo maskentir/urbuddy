@@ -110,6 +110,18 @@ export function resolveMuseEndpoint(raw: string | undefined): Result<string, App
   return ok(validated.value.toString());
 }
 
+export function isLoopbackEndpoint(raw: string | undefined): boolean {
+  const resolved = resolveMuseEndpoint(raw);
+  if (resolved.isErr()) {
+    return false;
+  }
+  try {
+    return new URL(resolved.value).hostname !== "api.meta.ai";
+  } catch {
+    return false;
+  }
+}
+
 export interface MuseProviderOptions {
   readonly apiKey: string;
   readonly testLoopbackEndpoint?: string;

@@ -5,6 +5,7 @@ import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capt
 import { openWavSource } from "@adapters/audio/wav-source";
 import {
   createMuseProvider,
+  isLoopbackEndpoint,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
   resolveMuseEndpoint,
 } from "@adapters/speech/muse";
@@ -114,7 +115,11 @@ export function isAppContainer(value: AppContainer | { error: AppError }): value
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
-function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
+function cliDepsFrom(
+  app: AppContainer,
+  signal: AbortSignal,
+  env: Readonly<Record<string, string | undefined>>,
+): CliDeps {
   return {
     version: URBUDDY_VERSION,
     config: app.config,
@@ -132,6 +137,7 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
     }),
     transcribePort: createTranscribePort({
       clock: app.clock,
+      loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
       ...(isPermitted(app.policy, "network-egress")
         ? {
             createProvider: (env: Readonly<Record<string, string | undefined>>) => {
@@ -256,7 +262,7 @@ export async function runApp(
       startApp(app);
       let code: ExitCode;
       try {
-        code = await runCli(argv, cliDepsFrom(app, work.signal));
+        code = await runCli(argv, cliDepsFrom(app, work.signal, env));
       } catch (thrown: unknown) {
         const error = toAppError(thrown, "unhandled CLI failure");
         app.logger.error(formatError(error));
