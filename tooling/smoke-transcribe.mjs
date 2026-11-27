@@ -406,6 +406,12 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
   check(assertions, "english-final-present", result.stdout.includes("Smoke final."), "");
   check(
     assertions,
+    "source-partial-present",
+    events.some((event) => event.type === "partial" && event.text === "smoke"),
+    "",
+  );
+  check(
+    assertions,
     "indonesian-committed-present",
     result.stdout.includes("ID-SMOKE: Smoke final."),
     "",
@@ -416,7 +422,13 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
     translationComplete !== undefined &&
       translationComplete.sourceLanguage === "en" &&
       translationComplete.targetLanguage === "id" &&
-      translationComplete.committed >= 1 &&
+      translationComplete.finalized === 1 &&
+      translationComplete.committed === 1 &&
+      translationComplete.requests === 1 &&
+      translationComplete.provisionals === 0 &&
+      translationComplete.promptVersion === "urbuddy-translation-v3" &&
+      translationComplete.unresolvedInvocations === 0 &&
+      translationComplete.unresolvedPublication === false &&
       translationComplete.failed === false,
     JSON.stringify(translationComplete),
   );
@@ -430,8 +442,8 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
   );
   check(
     assertions,
-    "translation-request-sent",
-    translateStub.requests.length >= 1,
+    "exactly-one-final-translation-request",
+    translateStub.requests.length === 1 && events.every((event) => event.type !== "provisional"),
     `requests=${translateStub.requests.length}`,
   );
   check(

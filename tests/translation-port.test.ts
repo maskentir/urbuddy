@@ -136,6 +136,15 @@ describe("transcribe port with translation", () => {
       },
     });
     expect(outcome.isOk()).toBe(true);
+    expect(lines.some((line) => line.includes("[partial] Do not deploy"))).toBe(true);
+    expect(outcome.isOk() && outcome.value.translation).toMatchObject({
+      requests: 1,
+      finalized: 1,
+      committed: 1,
+      provisionals: 0,
+      unresolvedInvocations: 0,
+      unresolvedPublication: false,
+    });
     expect(lines.some((line) => line.includes("[final] Do not deploy it yet."))).toBe(true);
     expect(
       lines.some(

@@ -70,7 +70,7 @@ describe("explicit operation environment", () => {
       expect(translation.isOk() && translation.value).toEqual({
         enabled: true,
         provider: "openai",
-        model: "gpt-6-luna",
+        model: "gpt-6.1-terra",
         sourceLanguage: "ja",
         targetLanguage: "zh-Hant",
       });

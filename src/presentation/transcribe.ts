@@ -178,7 +178,7 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           : "OpenAI (api.openai.com)";
         await input.output.errLine(
           stripFormatting(
-            `disclosure: transcript text and recent context will be sent to ${recipient} for ${translationConfig.sourceLanguage} → ${translationConfig.targetLanguage} translation (${created.value.modelId}). Urbuddy does not store this translation.`,
+            `disclosure: finalized transcript text and recent context will be sent to ${recipient} for ${translationConfig.sourceLanguage} → ${translationConfig.targetLanguage} translation (${created.value.modelId}). Urbuddy does not store this translation.`,
           ),
         );
         scheduler = new TranslationScheduler({

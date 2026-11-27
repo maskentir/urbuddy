@@ -89,6 +89,7 @@ for (const scenario of scenarios) {
       }
     };
     const scheduler = new TranslationScheduler({
+      enableProvisionals: true,
       now: Date.now,
       ...(scenario.snapshot ? { debounceMs: 0 } : {}),
       signal: new AbortController().signal,

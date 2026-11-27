@@ -55,7 +55,9 @@ the 600 ms delay at which the offline scenarios starved previews.
 Both authorizations are consumed. Any later attempt requires fresh owner
 authorization.
 
-The existing runner fixes corpus v3, the production destination, Luna with
+The historical runs used prompt v2. The current runner uses the production
+v3 prompt by default. The legacy Luna invocation shape still fixes corpus
+v3, the production destination, Luna with
 `reasoning_effort: none`, zero retries, up to 16 invocations, and up to
 1,024 completion tokens per invocation. It forwards sanitized provider
 failure details when available and stops on operational failure. Review
@@ -95,8 +97,9 @@ response, while provisional translation uses successive source revisions.
 
 ## Offline provisional readiness
 
-On the unchanged production scheduler, run `node tooling/evaluate-provisional.mjs`
-after the build. The harness uses a virtual clock with 10 ms steps and a
+Run `node tooling/evaluate-provisional.mjs` after the build. The harness
+explicitly enables experimental provisional admission using the same
+scheduler. It uses a virtual clock with 10 ms steps and a
 fixed-delay echo provider. It tracks whether a current revision actually
 reaches the sink before finalization. Echo content establishes publication
 timing and revision correctness. Semantic usefulness requires model output.
@@ -131,4 +134,4 @@ whether useful pauses occur before changing admission. Use final-only
 evidence for initial semantic qualification and withhold a live preview
 performance claim.
 
-See the [controlled model selection results](./model-selection.md) for the blinded live comparison and [readiness evidence](./readiness.md) for the frozen inputs and offline snapshot experiment.
+See the [controlled model selection results](./model-selection.md) for the blinded live comparison, the [human bilingual review packet](./human-review.md) for adjudication, and [readiness evidence](./readiness.md) for the frozen inputs and offline snapshot experiment.

@@ -25,6 +25,7 @@ export const DEFAULT_TRANSLATION_LANGUAGES: TranslationLanguages = Object.freeze
   sourceLanguage: "auto",
   targetLanguage: "id",
 });
+export const DEFAULT_TRANSLATION_MODEL = "gpt-6.1-terra";
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language", fallback: "none" });
 
@@ -81,7 +82,8 @@ export function loadTranslationConfig(
   if (provider !== "openai") {
     return err(appError("CONFIG_INVALID", "unsupported translation provider"));
   }
-  const model = flags.translationModel ?? env["URBUDDY_TRANSLATION_MODEL"] ?? "gpt-6-luna";
+  const model =
+    flags.translationModel ?? env["URBUDDY_TRANSLATION_MODEL"] ?? DEFAULT_TRANSLATION_MODEL;
   if (!/^[a-z\d][a-z\d.-]{0,79}$/.test(model)) {
     return err(appError("CONFIG_INVALID", "invalid translation model identifier"));
   }

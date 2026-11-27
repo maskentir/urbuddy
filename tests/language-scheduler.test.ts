@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+
 import { appError, type AppError } from "@kernel/errors";
 import {
   TranslationScheduler,
@@ -51,20 +53,35 @@ function final(utteranceId: string, revision: number, text: string): TranscriptE
 }
 
 describe("TranslationScheduler", () => {
-  it("emits a committed translation for a finalized utterance and reports English evidence untouched", async () => {
+  it("invokes only for finalized utterances by default and preserves source evidence", async () => {
     const events: TranslationEvent[] = [];
+    const provider = fakeProvider();
     const scheduler = new TranslationScheduler({
-      provider: fakeProvider(),
+      provider,
+      debounceMs: 0,
       signal: new AbortController().signal,
       onEvent: async (event) => {
         events.push(event);
       },
     });
-    await scheduler.consume(partial("u1", 0, "Do not deploy the service yet"));
-    await scheduler.consume(final("u1", 1, "Do not deploy the service yet."));
+    scheduler.consume(partial("u1", 0, "Do not deploy the service yet"));
+    await setImmediate();
+    expect(provider.calls).toHaveLength(0);
+    scheduler.consume(final("u1", 1, "Do not deploy the service yet."));
     const summary = await scheduler.finish();
-    expect(summary.committed).toBe(1);
-    expect(summary.failed).toBe(false);
+    expect(summary).toMatchObject({
+      requests: 1,
+      finalized: 1,
+      committed: 1,
+      provisionals: 0,
+      uncovered: 0,
+      unresolvedInvocations: 0,
+      unresolvedPublication: false,
+      failed: false,
+    });
+    expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
+      "Do not deploy the service yet.",
+    ]);
     const committed = events.filter((event) => event.type === "committed");
     expect(committed.length).toBe(1);
     if (committed[0]?.type === "committed") {
@@ -92,6 +109,7 @@ describe("TranslationScheduler", () => {
         if (event.type === "provisional") published.resolve();
         return true;
       },
+      enableProvisionals: true,
       debounceMs: 0,
     });
     scheduler.consume(partial("u1", 0, "公開してもいい"));
@@ -131,6 +149,7 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
+      enableProvisionals: true,
       debounceMs: 0,
     });
     await scheduler.consume(partial("u1", 0, "Ship it after the migration is verified tonight"));
@@ -165,6 +184,7 @@ describe("TranslationScheduler", () => {
     const scheduler = new TranslationScheduler({
       provider: fakeProvider(),
       signal: new AbortController().signal,
+      enableProvisionals: true,
       debounceMs: 0,
       onEvent: async (event, isCurrent) => {
         if (event.type === "provisional") {
@@ -336,6 +356,7 @@ describe("TranslationScheduler", () => {
       provider,
       signal: new AbortController().signal,
       onEvent: async () => {},
+      enableProvisionals: true,
       debounceMs: 0,
       drainMs: 25,
     });
@@ -571,6 +592,7 @@ describe("TranslationScheduler", () => {
     const controller = new AbortController();
     const scheduler = new TranslationScheduler({
       provider,
+      enableProvisionals: true,
       signal: controller.signal,
       onEvent: async () => {},
     });

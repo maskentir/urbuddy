@@ -271,7 +271,11 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
     .option("--mode <mode>", "recognition mode (endpointing or diarization)", "endpointing")
     .option("--keywords <terms>", "comma-separated vocabulary biasing terms")
     .option("--json", "emit one stable JSON object per line", false)
-    .option("--translate", "send transcript text for translation (requires --allow-egress)", false)
+    .option(
+      "--translate",
+      "translate finalized speech experimentally (requires --allow-egress)",
+      false,
+    )
     .option("--source-language <tag>", "translation source language tag or auto")
     .option("--target-language <tag>", "translation target language tag")
     .option("--translation-provider <name>", "translation provider")

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { type AddressInfo } from "node:net";
 import { TextDecoder } from "node:util";
@@ -11,9 +12,13 @@ import {
   TRANSLATE_API_KEY_ENV,
   TRANSLATE_ENDPOINT_ENV,
 } from "@adapters/translation/openai";
-import { DEFAULT_TRANSLATION_LANGUAGES } from "@modules/config/translation";
+import {
+  DEFAULT_TRANSLATION_LANGUAGES,
+  DEFAULT_TRANSLATION_MODEL,
+} from "@modules/config/translation";
 import { buildTranslationRequest } from "@modules/language/translation";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 interface RecordedRequest {
   readonly url: string;
@@ -34,12 +39,15 @@ function readBody(request: IncomingMessage): Promise<Buffer> {
   });
 }
 
-function completionResponse(translation: string): string {
+function completionResponse(
+  translation: string,
+  model: string = OPENAI_TRANSLATION_MODEL_ID,
+): string {
   return JSON.stringify({
     id: "chatcmpl-test",
     object: "chat.completion",
     created: 1,
-    model: OPENAI_TRANSLATION_MODEL_ID,
+    model,
     choices: [
       {
         index: 0,
@@ -128,11 +136,12 @@ describe("OpenAI translation adapter (local stub)", () => {
   it("sends the pinned model with versioned prompt and captures usage", async () => {
     const stub = stubServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(completionResponse("Jangan deploy dulu."));
+      response.end(completionResponse("Jangan deploy dulu.", DEFAULT_TRANSLATION_MODEL));
     });
     const provider = createOpenAITranslationProvider({
       apiKey: "loopback-translate-credential",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = await provider.translate(
       buildTranslationRequest(
@@ -150,12 +159,25 @@ describe("OpenAI translation adapter (local stub)", () => {
     expect(stub.requests.length).toBe(1);
     const body = stub.requests[0]?.body as {
       readonly model?: unknown;
-      readonly messages?: readonly { readonly content?: unknown }[];
+      readonly messages?: readonly { readonly role?: unknown; readonly content?: unknown }[];
     };
-    expect(body.model).toBe(OPENAI_TRANSLATION_MODEL_ID);
     expect(stub.requests[0]?.authorization).toBe("Bearer loopback-translate-credential");
     const joined = JSON.stringify(body.messages);
-    expect(joined).toContain("urbuddy-translation-v2");
+    const evaluatedPrompt = z
+      .object({ system: z.string(), version: z.string() })
+      .parse(
+        JSON.parse(
+          readFileSync(
+            new URL("../evaluation/language/prompts/urbuddy-translation-v3.json", import.meta.url),
+            "utf8",
+          ),
+        ),
+      );
+    expect(body.messages?.[0]).toEqual({
+      role: "developer",
+      content: `${evaluatedPrompt.system} Prompt version: ${evaluatedPrompt.version}.`,
+    });
+    expect(body.model).toBe("gpt-6.1-terra");
     expect(joined).toContain("Don't deploy it yet.");
     expect(stub.requests[0]?.body).toMatchObject({
       reasoning_effort: "none",

@@ -16,10 +16,11 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 Application Foundation and Core Runtime are merged. Speech Perception
 completed its initial implementation gate, including an owner-authorized
 Muse run series. Production latency, rotation, endurance, and recognition
-accuracy remain open. Live Language Engine is in progress. Luna and Terra
-both published all finals in the transcript-only comparison. Neither
-met the frozen semantic criteria. Human bilingual review and live
-preview qualification remain open.
+accuracy remain open. Live Language Engine is in progress. The proposed
+experimental slice translates finalized utterances. Neither Luna nor
+Terra met the frozen semantic criteria. Human bilingual review,
+sustained committed throughput, end-to-end latency, and useful
+provisional translation remain open.
 See the [roadmap](./docs/roadmap.md) and [translation evaluation guide](./evaluation/language/README.md).
 
 ## The problem
@@ -188,8 +189,11 @@ file accepts the eight variables in [the example](.env.example). Authorization,
 endpoint overrides, Node options, and tracing cannot be configured through it.
 
 Translation requires `--translate` and effective egress. The provider and
-language values alone leave it off. Muse recognition settings are independent
-of translation source interpretation.
+language values alone leave it off. It sends finalized utterances for
+experimental translation with the evaluated v3 prompt and defaults to
+`gpt-6.1-terra`. Existing configured model overrides still take
+precedence. Original partial transcripts remain visible. Muse
+recognition settings are independent of translation source interpretation.
 
 ```sh
 pnpm build

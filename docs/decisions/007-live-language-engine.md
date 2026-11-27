@@ -8,8 +8,9 @@ qualification are pending.
 Translation is a separate, opt-in operation on immutable transcript revisions.
 The CLI resolves translation settings once. Explicit flags override the
 process environment, which overrides an explicitly selected environment
-file and then built-in defaults. The defaults are `auto` source interpretation, `id` target,
-`openai` provider, and `gpt-6-luna` model. Validated canonical locale tags
+file and then built-in defaults. The experimental defaults are `auto` source
+interpretation, `id` target, `openai` provider, and `gpt-6.1-terra` model.
+Validated canonical locale tags
 express intent. Product support and model quality for each language remain
 qualification questions. Translation source settings leave Muse recognition
 settings untouched. Code-switched spans retain their meaning, and the prompt
@@ -51,24 +52,29 @@ bounded source text, ordered prior source evidence, languages and
 an optional Indonesia-scoped contextual glossary. Speech, glossary
 preferences and context are treated as data. Preserve original meaning
 and unresolved fragments, including spoken instructions and delimiter-like
-text. The prompt version and glossary identity accompany each translation.
+text. The production request uses the evaluated v3 prompt. The prompt
+version and glossary identity accompany each translation.
 
 ## Scheduling and publication
 
-- One finalized utterance is one committed unit. Perception assigns an
+- The opt-in CLI translates finalized utterances and continues displaying
+  the original partial transcripts. Partial revisions retain ordering and
+  continuity metadata without starting translation work. One finalized
+  utterance is one committed unit. Perception assigns an
   occurrence sequence at turn creation so late finals exclude later speech
   from context. Speaker labels are approximate attribution. Fragment
   evidence is a source-punctuation heuristic and has no grammatical guarantee.
-- Revisions coalesce over a 400 ms window starting at the first pending
+- The offline provisional experiment enables revision coalescing over a
+  400 ms window starting at the first pending
   revision. Meaningful shorter and same-length text changes are eligible.
   Preview validity follows source revision, discontinuity and operation
-  lifetime. The CLI emits invalidation records as space allows. Consumers
+  lifetime. The scheduler emits invalidation records as space allows. Consumers
   treat a newer source revision, gap, or terminal event as invalidating
   the corresponding preview even if an explicit invalidation could not
   be delivered. A sink checks validity immediately before the write.
   Bytes already handed to a stream cannot be withdrawn.
-- Actual provider admission is sequential across committed and provisional
-  work. Committed work takes priority and requests cancellation of active
+- Actual provider admission is sequential. When provisionals are enabled
+  for experiments, committed work takes priority and requests cancellation of active
   provisional work. It waits for local settlement before acquiring the
   slot. The latency trade-off awaits measurement.
 - The operation admits at most 4,096 occurrence identities, 16 pending
