@@ -70,3 +70,16 @@ strict completion and JSON validation, and an explicit tracing context. The
 application scheduler and evaluation runner use the same application-owned
 port and exchange no SDK types. See [ADR-007](decisions/007-live-language-engine.md)
 for the wire contract and acceptance status.
+
+For configuration, [Commander](https://github.com/tj/commander.js#options)
+already parses CLI options, [Node's `util.parseEnv`](https://nodejs.org/api/util.html#utilparseenvcontent)
+parses the explicitly selected file into an object, and [Zod](https://zod.dev/basics)
+validates the existing session schema. Urbuddy supplies the file allowlist,
+precedence, and operation-specific authorization checks.
+[c12](https://github.com/unjs/c12) adds discovery and configuration layers
+outside this contract. [envalid](https://github.com/af/envalid) handles typed
+environment validation, which overlaps with the existing validation path.
+[@t3-oss/env-core](https://env.t3.gg/docs/core) adds schema and server/client
+environment handling, and still requires a runtime environment input.
+The explicit file policy and capability boundaries would remain application
+code with any of these three packages.
