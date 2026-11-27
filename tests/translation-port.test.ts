@@ -87,7 +87,12 @@ function failingTranslator(): TranslationProvider {
   return {
     providerId: "fake",
     modelId: "fake-1",
-    translate: async () => err(appError("INTERNAL", "translation request failed")),
+    translate: async () =>
+      err(
+        appError("INTERNAL", "translation request failed", {
+          details: { provider: "fixture", category: "transport" },
+        }),
+      ),
   };
 }
 
@@ -336,7 +341,12 @@ describe("transcribe port with translation", () => {
       },
     });
     expect(outcome.isOk()).toBe(true);
-    expect(lines.some((line) => line.includes('"type":"degraded"'))).toBe(true);
+    expect(lines.map((line) => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        type: "degraded",
+        details: { provider: "fixture", category: "transport" },
+      }),
+    );
     if (outcome.isOk() && outcome.value.translation !== undefined) {
       expect(outcome.value.translation.committed).toBe(0);
       expect(outcome.value.translation.degraded).toBe(1);

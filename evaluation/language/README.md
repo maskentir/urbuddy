@@ -33,24 +33,26 @@ provisional pending independent human bilingual sign-off. Live qualification
 requires zero critical semantic failures and complete finalized coverage
 on the reviewed corpus. Report noncritical fluency concerns separately.
 
-## Proposed live qualification
+## Live qualification status
 
-Get explicit owner authorization for the exact corpus, model, run count,
-recipient and cost cap before running. Use only the committed synthetic
-corpus. The one planned transcript run uses OpenAI GPT-6 Luna with
-`reasoning_effort: none`, no retries, at most 16 invocations including
-the prior context utterance, and at most 1,024 completion tokens per
-invocation. It uses each case's source and target configuration. At
-current Standard pricing of USD 0.10 per million input tokens and USD 0.50
-per million output tokens, budgeting 8,192 input tokens for the enforced
-4,096-byte message bound plus API framing and the hard output cap gives
-`16 × (8192 × 0.10 + 1024 × 0.50) / 1,000,000 = USD 0.0213`.
-The USD 0.05 proposal remains subject to authorization.
-Verify prices and enable owner-approved project spending controls before
-execution. [OpenAI model and rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+The one authorized run against OpenAI GPT-6 Luna and corpus v3 stopped at
+`neg-001`. One local invocation started and exit status was 1. No valid
+completion or usage metadata was captured. The retained diagnostic was
+`provider failure (INTERNAL)`. HTTP status, error code, and request ID
+were unavailable, so the original cause and any billed cost remain
+unknown. No semantic case was scored. The previous authorization is consumed.
+Any later attempt requires fresh owner authorization.
 
-With authorization and the dedicated `URBUDDY_OPENAI_API_KEY` available
-locally, run once. The evaluator shares the CLI environment-file loader.
+The existing runner fixes corpus v3, the production destination, Luna with
+`reasoning_effort: none`, zero retries, up to 16 invocations, and up to
+1,024 completion tokens per invocation. It forwards sanitized provider
+failure details when available and stops on operational failure. Review
+the current public rates and authorized spend before a future run.
+[OpenAI model and rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+
+With fresh authorization and the dedicated `URBUDDY_OPENAI_API_KEY` available
+locally, use an unused evidence filename to preserve the first attempt.
+The evaluator shares the CLI environment-file loader.
 Live mode fixes the authorized production recipient, Luna model and v3
 case languages even when the environment configures different defaults.
 
@@ -59,9 +61,9 @@ pnpm build
 umask 077
 mkdir -p evaluation/language/results
 node tooling/evaluate-translation.mjs --env-file .env --live --allow-egress \
-  > evaluation/language/results/luna-synthetic-001.ndjson \
-  2> evaluation/language/results/luna-synthetic-001.stderr
-printf '%s\n' "$?" > evaluation/language/results/luna-synthetic-001.exit
+  > evaluation/language/results/luna-synthetic-next.ndjson \
+  2> evaluation/language/results/luna-synthetic-next.stderr
+printf '%s\n' "$?" > evaluation/language/results/luna-synthetic-next.exit
 ```
 
 Record the exact commit, Node version, model, prompt and corpus versions,

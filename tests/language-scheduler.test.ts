@@ -8,23 +8,7 @@ import {
 import type { TranscriptEvent } from "@modules/perception/speech";
 import * as fc from "fast-check";
 import { err, ok, type Result } from "neverthrow";
-import { afterEach, describe, expect, it } from "vitest";
-
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import { describe, expect, it } from "vitest";
 
 interface FakeRequest {
   readonly userText: string;
@@ -66,18 +50,7 @@ function final(utteranceId: string, revision: number, text: string): TranscriptE
   return { type: "final", utteranceId, revision, text };
 }
 
-function flush(): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
-}
-
 describe("TranslationScheduler", () => {
-  const cleanups: (() => void)[] = [];
-  afterEach(() => {
-    for (const cleanup of cleanups.splice(0)) {
-      cleanup();
-    }
-  });
-
   it("emits a committed translation for a finalized utterance and reports English evidence untouched", async () => {
     const events: TranslationEvent[] = [];
     const scheduler = new TranslationScheduler({
@@ -103,24 +76,29 @@ describe("TranslationScheduler", () => {
 
   it("reconsiders a shortened Japanese correction after in-flight work settles", async () => {
     const events: TranslationEvent[] = [];
-    const gate = deferred<Result<TranslationResult, AppError>>();
-    const provider = fakeProvider(async () =>
-      provider.calls.length === 1 ? gate.promise : ok({ text: "아직 안 돼." }),
-    );
+    const gate = Promise.withResolvers<Result<TranslationResult, AppError>>();
+    const started = Promise.withResolvers<void>();
+    const published = Promise.withResolvers<void>();
+    const provider = fakeProvider(async () => {
+      started.resolve();
+      return provider.calls.length === 1 ? gate.promise : ok({ text: "아직 안 돼." });
+    });
     const scheduler = new TranslationScheduler({
       provider,
       languages: { sourceLanguage: "ja", targetLanguage: "ko" },
       signal: new AbortController().signal,
       onEvent: async (event) => {
         events.push(event);
+        if (event.type === "provisional") published.resolve();
+        return true;
       },
       debounceMs: 0,
     });
     scheduler.consume(partial("u1", 0, "公開してもいい"));
-    await flush();
+    await started.promise;
     scheduler.consume(partial("u1", 1, "まだダメ"));
     gate.resolve(ok({ text: "stale", usage: { inputTokens: 8, outputTokens: 2 } }));
-    await flush();
+    await published.promise;
     const summary = await scheduler.finish();
     expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
       "公開してもいい",
@@ -141,16 +119,11 @@ describe("TranslationScheduler", () => {
 
   it("never lets a late provisional overwrite a committed translation", async () => {
     const events: TranslationEvent[] = [];
-    const gate = deferred<Result<TranslationResult, AppError>>();
-    let releaseCommitted: ((value: Result<TranslationResult, AppError>) => void) | undefined;
-    const provider = fakeProvider((request) => {
-      void request;
-      if (provider.calls.length === 1) {
-        return gate.promise;
-      }
-      return new Promise<Result<TranslationResult, AppError>>((resolve) => {
-        releaseCommitted = resolve;
-      });
+    const gate = Promise.withResolvers<Result<TranslationResult, AppError>>();
+    const started = Promise.withResolvers<void>();
+    const provider = fakeProvider(async () => {
+      started.resolve();
+      return provider.calls.length === 1 ? gate.promise : ok({ text: "ID final." });
     });
     const scheduler = new TranslationScheduler({
       provider,
@@ -161,14 +134,9 @@ describe("TranslationScheduler", () => {
       debounceMs: 0,
     });
     await scheduler.consume(partial("u1", 0, "Ship it after the migration is verified tonight"));
-    await flush();
-    await flush();
-    await scheduler.consume(final("u1", 1, "Ship it after the migration is verified."));
-    await flush();
+    await started.promise;
+    scheduler.consume(final("u1", 1, "Ship it after the migration is verified."));
     gate.resolve(ok({ text: "ID: late provisional" }));
-    await flush();
-    await flush();
-    releaseCommitted?.(ok({ text: "ID final." }));
     const summary = await scheduler.finish();
     const committed = events.filter((event) => event.type === "committed");
     const provisionals = events.filter((event) => event.type === "provisional");
@@ -191,8 +159,8 @@ describe("TranslationScheduler", () => {
   });
 
   it("rejects a delayed provisional write and publishes the later final", async () => {
-    const entered = deferred<void>();
-    const release = deferred<void>();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     const events: TranslationEvent[] = [];
     const scheduler = new TranslationScheduler({
       provider: fakeProvider(),
@@ -325,8 +293,12 @@ describe("TranslationScheduler", () => {
   });
 
   it("admits a single invocation across many pending partials and bounds non-cooperative shutdown", async () => {
-    const gate = deferred<Result<TranslationResult, AppError>>();
-    const provider = fakeProvider(async () => gate.promise);
+    const gate = Promise.withResolvers<Result<TranslationResult, AppError>>();
+    const started = Promise.withResolvers<void>();
+    const provider = fakeProvider(async () => {
+      started.resolve();
+      return gate.promise;
+    });
     const scheduler = new TranslationScheduler({
       provider,
       signal: new AbortController().signal,
@@ -335,7 +307,7 @@ describe("TranslationScheduler", () => {
       drainMs: 25,
     });
     scheduler.consume(partial("u0", 0, "公開はまだ"));
-    await flush();
+    await started.promise;
     for (let index = 1; index < 100; index += 1) {
       scheduler.consume(partial(`u${index}`, 0, "後で公開する"));
     }
@@ -355,11 +327,18 @@ describe("TranslationScheduler", () => {
 
   it("degrades explicitly when committed work exceeds its bound", async () => {
     const events: TranslationEvent[] = [];
-    const gates: Deferred<Result<TranslationResult, AppError>>[] = [];
-    const provider = fakeProvider(() => {
-      const gate = deferred<Result<TranslationResult, AppError>>();
-      gates.push(gate);
-      return gate.promise;
+    const gates = ["ID: one.", "ID: two.", "ID: three."].map((text) => ({
+      text,
+      started: Promise.withResolvers<void>(),
+      settled: Promise.withResolvers<Result<TranslationResult, AppError>>(),
+    }));
+    const provider = fakeProvider(async () => {
+      const gate = gates[provider.calls.length - 1];
+      if (gate === undefined) {
+        throw new Error("unexpected invocation");
+      }
+      gate.started.resolve();
+      return gate.settled.promise;
     });
     const scheduler = new TranslationScheduler({
       provider,
@@ -373,16 +352,10 @@ describe("TranslationScheduler", () => {
     await scheduler.consume(final("u2", 0, "Second sentence here."));
     await scheduler.consume(final("u3", 0, "Third sentence here."));
     await scheduler.consume(final("u4", 0, "Fourth sentence here."));
-    expect(provider.calls.length).toBe(1);
-    gates[0]?.resolve(ok({ text: "ID: one." }));
-    await flush();
-    await flush();
-    expect(provider.calls.length).toBe(2);
-    gates[1]?.resolve(ok({ text: "ID: two." }));
-    await flush();
-    await flush();
-    expect(provider.calls.length).toBe(3);
-    gates[2]?.resolve(ok({ text: "ID: three." }));
+    for (const gate of gates) {
+      await gate.started.promise;
+      gate.settled.resolve(ok({ text: gate.text }));
+    }
     const summary = await scheduler.finish();
     expect(summary.committed).toBe(3);
     expect(summary.degraded).toBe(1);

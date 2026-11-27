@@ -11,6 +11,22 @@ import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 describe("explicit operation environment", () => {
+  it("rejects non-regular and oversized file input", () => {
+    const directory = mkdtempSync(join(tmpdir(), "urbuddy-config-"));
+    try {
+      const file = join(directory, ".env");
+      writeFileSync(file, Buffer.alloc(64 * 1024 + 1));
+      for (const input of [directory, file]) {
+        const loaded = loadOperationEnvironment({}, input);
+        expect(loaded.isErr() && loaded.error.message).toBe(
+          "environment file must be regular and at most 64 KiB",
+        );
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("loads capability settings and provider keys only, with process and CLI precedence", () => {
     const directory = mkdtempSync(join(tmpdir(), "urbuddy-config-"));
     const file = join(directory, ".env");

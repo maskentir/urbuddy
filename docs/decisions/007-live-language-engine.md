@@ -31,13 +31,15 @@ The adapter uses LangChain Chat Completions with a documented compatible
 model selection of `gpt-6-luna` or `gpt-6.1-terra`. It requests
 `reasoning_effort: none` and JSON object mode, uses
 `max_completion_tokens: 1024`, omits sampling parameters, disables
-automatic retries, and bounds HTTP and invoke time to eight seconds.
+automatic retries, and applies an eight-second SDK transport timeout.
 The installed LangChain routes `json_schema` through the SDK parse path,
 which throws for truncation before usage reaches the adapter. JSON object
 mode preserves the completion envelope for manual strict validation.
 Manual validation checks raw completion status, refusal, tools, JSON
 shape and text limits. Reported usage is validated independently of
-the completion verdict. The outbound fetch admits one exact endpoint
+the completion verdict. Provider failures retain safe HTTP status,
+classified error category, allowlisted code and validated request ID when
+available. The outbound fetch admits one exact endpoint
 and rejects redirects. The LangChain invocation installs a disabled
 trace context with empty callbacks. Inherited legacy `LANGCHAIN_TRACING`
 fails closed because the installed callback manager treats any nonempty

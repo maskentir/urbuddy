@@ -13,11 +13,13 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 
 ## Status
 
-Application Foundation and Core Runtime are merged (`0.1.0`);
-Speech Perception native audio acquisition is merged, and streaming
-speech recognition is implemented against a local protocol server
-(live provider acceptance pending owner authorization). See
-[docs/roadmap.md](./docs/roadmap.md) for milestones and acceptance gates.
+Application Foundation and Core Runtime are merged. Speech Perception
+completed its initial implementation gate, including an owner-authorized
+Muse run series. Production latency, rotation, endurance, and recognition
+accuracy remain open. Live Language Engine is in progress. The single
+authorized Luna attempt stopped on its first invocation without a valid
+completion. Semantic qualification and actual preview latency remain open.
+See the [roadmap](./docs/roadmap.md) and [translation evaluation guide](./evaluation/language/README.md).
 
 ## The problem
 

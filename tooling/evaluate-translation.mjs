@@ -126,7 +126,10 @@ try {
           try {
             const result = await backend.translate(request);
             if (result.isErr() && result.error.code !== "VALIDATION_FAILED") {
-              stopCase(`provider failure (${result.error.code})`);
+              const { code, details } = result.error;
+              stopCase(
+                `provider failure (${code})${details === undefined ? "" : ` ${JSON.stringify(details)}`}`,
+              );
             }
             return result;
           } catch {

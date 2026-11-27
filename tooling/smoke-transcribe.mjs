@@ -1,8 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { WebSocketServer } from "ws";
@@ -91,10 +93,7 @@ function startServer() {
   const stamp = (kind, detail = {}) => events.push({ at: Date.now(), kind, ...detail });
   const connections = [];
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  const listening = new Promise((resolve, reject) => {
-    wss.once("listening", resolve);
-    wss.once("error", reject);
-  });
+  const listening = once(wss, "listening");
   wss.on("connection", (socket) => {
     const conn = {
       audioBytes: 0,
@@ -220,10 +219,7 @@ function startTranslationStub() {
       );
     });
   });
-  const listening = new Promise((resolve, reject) => {
-    server.once("listening", resolve);
-    server.once("error", reject);
-  });
+  const listening = once(server, "listening");
   server.listen(0, "127.0.0.1");
   return { server, listening, requests };
 }
@@ -242,55 +238,41 @@ function childEnv(extra) {
   };
 }
 
-let activeChild = null;
-
 function runCli(args, env, timeoutMs) {
+  const started = Date.now();
   return new Promise((resolve) => {
-    const started = Date.now();
-    const child = spawn(process.execPath, [cli, ...args], {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeChild = child;
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        return;
-      }
-    }, timeoutMs);
-    timer.unref?.();
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      activeChild = null;
-      resolve({
-        code: code ?? "null",
-        signal: signal ?? null,
-        stdout,
-        stderr,
-        durationMs: Date.now() - started,
-        timedOut: false,
-      });
-    });
-    setTimeout(() => {
-      resolve({
-        code: "timeout",
-        signal: null,
-        stdout,
-        stderr,
-        durationMs: timeoutMs,
-        timedOut: true,
-      });
-    }, timeoutMs + 5000).unref?.();
+    execFile(
+      process.execPath,
+      [cli, ...args],
+      { env, timeout: timeoutMs, killSignal: "SIGKILL" },
+      (error, stdout, stderr) => {
+        const timedOut =
+          error?.killed === true && error.code === null && error.signal === "SIGKILL";
+        resolve({
+          code: timedOut ? "timeout" : error === null ? 0 : (error.code ?? "null"),
+          signal: error?.signal ?? null,
+          stdout,
+          stderr,
+          durationMs: Date.now() - started,
+          timedOut,
+        });
+      },
+    ).stdin.end();
   });
+}
+
+function readEvents(stdout, assertions) {
+  try {
+    const events = stdout
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+    check(assertions, "ndjson-parseable", true);
+    return events;
+  } catch {
+    check(assertions, "ndjson-parseable", false);
+    return [];
+  }
 }
 
 function check(assertions, name, pass, detail = "") {
@@ -345,24 +327,14 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   );
   check(assertions, "endStream-observed", conn !== undefined && conn.endStreamSeen === true, "");
   if (json) {
-    let complete = null;
-    let parseOk = true;
-    for (const line of result.stdout.split("\n").filter((l) => l.trim().length > 0)) {
-      try {
-        const event = JSON.parse(line);
-        if (event.type === "complete") {
-          complete = event;
-        }
-      } catch {
-        parseOk = false;
-      }
-    }
-    check(assertions, "ndjson-parseable", parseOk, "");
+    const complete = readEvents(result.stdout, assertions).findLast(
+      (event) => event.type === "complete",
+    );
     check(assertions, "final-transcript-present", result.stdout.includes("Smoke final."), "");
     check(
       assertions,
       "complete-summary",
-      complete !== null && complete.finals >= 1 && complete.providerId === "muse",
+      complete !== undefined && complete.finals >= 1 && complete.providerId === "muse",
       JSON.stringify(complete),
     );
   } else {
@@ -428,23 +400,9 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
   const assertions = [];
   check(assertions, "exit-code-0", result.code === 0, `code=${result.code}`);
   check(assertions, "no-timeout", !result.timedOut, "");
-  let complete = null;
-  let translationComplete = null;
-  let parseOk = true;
-  for (const line of result.stdout.split("\n").filter((l) => l.trim().length > 0)) {
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "complete") {
-        complete = event;
-      }
-      if (event.type === "translation-complete") {
-        translationComplete = event;
-      }
-    } catch {
-      parseOk = false;
-    }
-  }
-  check(assertions, "ndjson-parseable", parseOk, "");
+  const events = readEvents(result.stdout, assertions);
+  const complete = events.findLast((event) => event.type === "complete");
+  const translationComplete = events.findLast((event) => event.type === "translation-complete");
   check(assertions, "english-final-present", result.stdout.includes("Smoke final."), "");
   check(
     assertions,
@@ -455,7 +413,7 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
   check(
     assertions,
     "translation-summary",
-    translationComplete !== null &&
+    translationComplete !== undefined &&
       translationComplete.sourceLanguage === "en" &&
       translationComplete.targetLanguage === "id" &&
       translationComplete.committed >= 1 &&
@@ -465,7 +423,9 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
   check(
     assertions,
     "complete-carries-translation",
-    complete !== null && complete.translation !== undefined && complete.translation.committed >= 1,
+    complete !== undefined &&
+      complete.translation !== undefined &&
+      complete.translation.committed >= 1,
     JSON.stringify(complete),
   );
   check(
@@ -542,8 +502,7 @@ const server = startServer();
 const translateStub = startTranslationStub();
 let allPass = true;
 try {
-  await server.listening;
-  await translateStub.listening;
+  await Promise.all([server.listening, translateStub.listening]);
   const address = server.wss.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
   const translateAddress = translateStub.server.address();
@@ -623,13 +582,23 @@ try {
   manifest.harnessError =
     thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown);
 } finally {
-  if (activeChild !== null) {
-    try {
-      activeChild.kill("SIGKILL");
-    } catch {
-      activeChild = null;
-    }
-    activeChild = null;
+  const cleanup = new AbortController();
+  for (const socket of server.wss.clients) {
+    socket.terminate();
+  }
+  const websocketClosed = new Promise((resolve) => server.wss.close((error) => resolve(!error)));
+  const httpClosed = new Promise((resolve) =>
+    translateStub.server.close((error) => resolve(!error)),
+  );
+  translateStub.server.closeAllConnections();
+  const closed = await Promise.race([
+    Promise.all([websocketClosed, httpClosed]).then((results) => results.every(Boolean)),
+    delay(5_000, false, { signal: cleanup.signal }),
+  ]);
+  cleanup.abort();
+  if (!closed) {
+    allPass = false;
+    manifest.cleanupError = "loopback server shutdown failed or exceeded 5 seconds";
   }
   writeEvidence(
     "server-events.jsonl",
@@ -645,8 +614,6 @@ try {
   manifest.finishedAt = new Date().toISOString();
   manifest.pass = allPass;
   writeEvidence("manifest.json", JSON.stringify(manifest, null, 2));
-  await new Promise((done) => server.wss.close(() => done()));
-  await new Promise((done) => translateStub.server.close(() => done()));
 }
 
 console.log(`smoke-transcribe: ${allPass ? "PASS" : "FAIL"} evidence=${evidenceDir}`);
@@ -660,6 +627,9 @@ if (!allPass) {
   }
   if (manifest.harnessError !== undefined) {
     console.log(`  FAIL harness/${manifest.harnessError}`);
+  }
+  if (manifest.cleanupError !== undefined) {
+    console.log(`  FAIL cleanup/${manifest.cleanupError}`);
   }
   process.exit(1);
 }

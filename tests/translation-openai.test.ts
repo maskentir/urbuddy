@@ -352,11 +352,49 @@ describe("OpenAI translation adapter (local stub)", () => {
     }
   });
 
-  it("makes exactly one attempt against a failing server", async () => {
+  it.each([
+    [400, "unsupported_parameter", "invalid-request"],
+    [401, "invalid_api_key", "authentication"],
+    [403, "model_not_found", "permission"],
+    [404, "model_not_found", "model-unavailable"],
+    [429, "insufficient_quota", "rate-limit"],
+    [500, "private-provider-code", "provider-failure"],
+  ])("captures safe diagnostics for HTTP %i in one attempt", async (status, code, category) => {
     const stub = stubServer((_request, response) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: "boom" }));
+      response.writeHead(status, {
+        "content-type": "application/json",
+        "x-request-id": status === 500 ? "private-header-value" : "req_1234567890",
+      });
+      response.end(JSON.stringify({ error: { code, message: "private-provider-message" } }));
     });
+    const provider = createOpenAITranslationProvider({
+      apiKey: "key",
+      testEndpoint: await stub.url(),
+    });
+    const outcome = await provider.translate(
+      buildTranslationRequest(
+        "Private fixture input.",
+        [],
+        DEFAULT_TRANSLATION_LANGUAGES,
+        new AbortController().signal,
+      ),
+    );
+    expect(outcome.isErr() && outcome.error).toMatchObject({
+      code: "INTERNAL",
+      details: {
+        provider: "openai",
+        model: OPENAI_TRANSLATION_MODEL_ID,
+        category,
+        httpStatus: String(status),
+        ...(status === 500 ? {} : { providerCode: code, requestId: "req_1234567890" }),
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toMatch(/private-provider|private-header|Private fixture/);
+    expect(stub.requests).toHaveLength(1);
+  });
+
+  it("classifies a dropped connection as transport failure", async () => {
+    const stub = stubServer((_request, response) => response.destroy());
     const provider = createOpenAITranslationProvider({
       apiKey: "key",
       testEndpoint: await stub.url(),
@@ -369,11 +407,8 @@ describe("OpenAI translation adapter (local stub)", () => {
         new AbortController().signal,
       ),
     );
-    expect(outcome.isErr()).toBe(true);
-    if (outcome.isErr()) {
-      expect(outcome.error.code).toBe("INTERNAL");
-    }
-    expect(stub.requests.length).toBe(1);
+    expect(outcome.isErr() && outcome.error.details).toMatchObject({ category: "transport" });
+    expect(stub.requests).toHaveLength(1);
   });
 
   it("fails a hanging request within its bound", async () => {
@@ -394,7 +429,7 @@ describe("OpenAI translation adapter (local stub)", () => {
         new AbortController().signal,
       ),
     );
-    expect(outcome.isErr()).toBe(true);
+    expect(outcome.isErr() && outcome.error.details).toMatchObject({ category: "timeout" });
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 

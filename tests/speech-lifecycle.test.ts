@@ -1,3 +1,4 @@
+import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { Server as NetServer, Socket as NetSocket } from "node:net";
 import { join } from "node:path";
@@ -412,6 +413,7 @@ describe("handshake readiness", () => {
   });
 
   it("delays audio until a late reconnect acknowledgement arrives", async () => {
+    const reconnecting = new EventEmitter();
     let ackAt = 0;
     const binaryAt: number[] = [];
     server = new SpeechTestServer(({ socket, index }) => {
@@ -442,16 +444,43 @@ describe("handshake readiness", () => {
         }
       });
     });
-    const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const provider = providerFor(await server.url(), {
+      sleep: async () => {
+        reconnecting.emit("backoff");
+      },
+    });
+    const source: CaptureSource = {
+      ...trackedSource([]),
+      async *items(signal) {
+        yield formatItem();
+        const backoff = once(reconnecting, "backoff", { signal }).then(
+          () => true,
+          () => false,
+        );
+        yield audioItem(1, 0);
+        if (await backoff) {
+          yield audioItem(2, 480);
+          yield endItem(3, 2);
+        }
+      },
+    };
     const outcome = await runTranscription({
-      source: pacedSource(20, 25),
+      source,
       provider,
-      signal: new AbortController().signal,
+      signal: AbortSignal.timeout(4_000),
       mode: "endpointing",
       keywords: [],
       onEvent: async () => {},
     });
-    expect(outcome.isOk()).toBe(true);
+    expect(
+      outcome.isOk() ? null : outcome.error,
+      JSON.stringify({
+        connections: server.connections,
+        ackAt,
+        binaryAt,
+      }),
+    ).toBeNull();
+    expect(server.connections).toBe(2);
     expect(binaryAt.length).toBeGreaterThan(0);
     expect(binaryAt.every((at) => at >= ackAt)).toBe(true);
   });

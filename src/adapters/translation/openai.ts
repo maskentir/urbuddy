@@ -21,6 +21,57 @@ const TRANSLATE_LOOPBACK_CREDENTIAL = "loopback-translate-credential";
 const REQUEST_TIMEOUT_MS = 8_000;
 const MODELS = new Set([OPENAI_TRANSLATION_MODEL_ID, "gpt-6.1-terra"]);
 
+const providerCodes = z.enum([
+  "invalid_api_key",
+  "model_not_found",
+  "insufficient_quota",
+  "rate_limit_exceeded",
+  "context_length_exceeded",
+  "unsupported_parameter",
+  "invalid_value",
+]);
+const httpCategories: Readonly<Partial<Record<number, string>>> = {
+  400: "invalid-request",
+  401: "authentication",
+  403: "permission",
+  404: "model-unavailable",
+  422: "invalid-request",
+  429: "rate-limit",
+};
+const failureMetadata = z.object({
+  status: z.number().int().min(400).max(599).optional().catch(undefined),
+  code: providerCodes.optional().catch(undefined),
+  requestID: z
+    .string()
+    .regex(/^req_[a-zA-Z0-9]{8,64}$/)
+    .optional()
+    .catch(undefined),
+});
+
+function providerFailure(thrown: unknown, model: string): AppError {
+  const metadata = failureMetadata.safeParse(thrown);
+  const { status, code, requestID } = metadata.success ? metadata.data : {};
+  const category =
+    status === undefined
+      ? thrown instanceof Error && thrown.name === "TimeoutError"
+        ? "timeout"
+        : thrown instanceof Error && thrown.constructor.name === "APIConnectionError"
+          ? "transport"
+          : "unknown"
+      : (httpCategories[status] ?? (status >= 500 ? "provider-failure" : "http-error"));
+
+  return appError("INTERNAL", "translation request failed", {
+    details: {
+      provider: "openai",
+      model,
+      category,
+      ...(status === undefined ? {} : { httpStatus: String(status) }),
+      ...(code === undefined ? {} : { providerCode: code }),
+      ...(requestID === undefined ? {} : { requestId: requestID }),
+    },
+  });
+}
+
 const translationSchema = z.strictObject({
   translation: z.string().trim().min(1).max(4_000),
 });
@@ -183,7 +234,7 @@ export function createOpenAITranslationProvider(
                   ? new SystemMessage(entry.content)
                   : new HumanMessage(entry.content),
               ),
-              { signal: request.signal, timeout, callbacks: [] },
+              { signal: request.signal, callbacks: [] },
             ),
         );
         const raw: unknown = message.additional_kwargs["__raw_response"];
@@ -231,7 +282,7 @@ export function createOpenAITranslationProvider(
         if (thrown instanceof SyntaxError) {
           return err(appError("VALIDATION_FAILED", "translation response failed validation"));
         }
-        return err(appError("INTERNAL", "translation request failed"));
+        return err(providerFailure(thrown, modelId));
       }
     },
   };

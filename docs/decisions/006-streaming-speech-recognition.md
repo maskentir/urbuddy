@@ -1,7 +1,7 @@
 # ADR-006: Streaming speech recognition (Muse first provider)
 
-Date: 2026-11-27. Status: accepted for implementation; live provider
-qualification pending owner authorization.
+Date: 2026-11-27. Status: accepted for initial implementation and live
+provider scope recorded in PR #10. Production qualification remains open.
 
 ## Context
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { AppError } from "@kernel/errors";
 import {
@@ -92,7 +93,11 @@ export type TranslationEvent = Evidence &
         readonly publicationMs: number;
       }
     | { readonly type: "invalidated" }
-    | { readonly type: "degraded"; readonly reason: Degradation }
+    | {
+        readonly type: "degraded";
+        readonly reason: Degradation;
+        readonly details?: AppError["details"];
+      }
   );
 
 export interface TranslationSummary extends TranslationLanguages {
@@ -510,7 +515,12 @@ export class TranslationScheduler {
           ? "validation-failed"
           : "provider-failed";
       if (source.type === "final") {
-        this.degrade(evidence, reason, isCurrent);
+        this.degrade(
+          evidence,
+          reason,
+          isCurrent,
+          result?.isErr() ? result.error.details : undefined,
+        );
       }
       return;
     }
@@ -555,9 +565,22 @@ export class TranslationScheduler {
     }
   }
 
-  private degrade(evidence: Evidence, reason: Degradation, current?: () => boolean): void {
+  private degrade(
+    evidence: Evidence,
+    reason: Degradation,
+    current?: () => boolean,
+    details?: AppError["details"],
+  ): void {
     this.stats.degraded += 1;
-    this.enqueue({ ...evidence, type: "degraded", reason }, current);
+    this.enqueue(
+      {
+        ...evidence,
+        type: "degraded",
+        reason,
+        ...(details === undefined ? {} : { details }),
+      },
+      current,
+    );
   }
 
   private enqueue(
@@ -674,28 +697,29 @@ export class TranslationScheduler {
   }
 
   private async waitForWork(ms: number, signal?: AbortSignal): Promise<void> {
-    const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), ms);
-    const bound =
-      signal === undefined ? deadline.signal : AbortSignal.any([deadline.signal, signal]);
-    let stop: (() => void) | undefined;
-    const timeout = new Promise<void>((resolve) => {
-      stop = () => resolve();
-      bound.addEventListener("abort", stop, { once: true });
-    });
+    const timer = new AbortController();
+    const bound = signal === undefined ? timer.signal : AbortSignal.any([timer.signal, signal]);
+    let expired = false;
+    const deadline = delay(ms, undefined, { signal: bound }).then(
+      () => {
+        expired = true;
+      },
+      (thrown: unknown) => {
+        if (!bound.aborted) {
+          throw thrown;
+        }
+      },
+    );
     try {
-      while (!bound.aborted) {
+      while (!bound.aborted && !expired) {
         const work = this.active?.done ?? this.publishing;
         if (work === undefined) {
           return;
         }
-        await Promise.race([work, timeout]);
+        await Promise.race([work, deadline]);
       }
     } finally {
-      clearTimeout(timer);
-      if (stop !== undefined) {
-        bound.removeEventListener("abort", stop);
-      }
+      timer.abort();
     }
   }
 }

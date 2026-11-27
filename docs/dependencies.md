@@ -83,3 +83,14 @@ environment validation, which overlaps with the existing validation path.
 environment handling, and still requires a runtime environment input.
 The explicit file policy and capability boundaries would remain application
 code with any of these three packages.
+
+Translation admission keeps its slot until the owned provider promise settles.
+[p-queue](https://github.com/sindresorhus/p-queue#how-do-i-cancel-or-remove-a-queued-task)
+releases a running slot on abort and can let the underlying work continue.
+Native abortable timers handle drain deadlines while scheduler state tracks
+actual settlement. For the compiled smoke, native `execFile` captures
+output, handles spawn errors, and terminates a deadline-exceeding child.
+[Execa](https://github.com/sindresorhus/execa/blob/main/docs/api.md) adds
+explicit timeout classification and escalation. The smoke launches one Node
+child with an isolated environment and no descendant capture process, so
+the native primitive covers its lifecycle.

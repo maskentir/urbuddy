@@ -86,7 +86,7 @@ function formatTranslationEvent(event: TranslationEvent): string {
     case "invalidated":
       return `[translation ${label}]`;
     case "degraded":
-      return `[translation ${label}] ${event.reason}`;
+      return `[translation ${label}] ${event.reason}${event.details === undefined ? "" : ` ${JSON.stringify(event.details)}`}`;
   }
 }
 
