@@ -8,7 +8,7 @@ import {
   createMuseProviderFromEnv,
   isLoopbackEndpoint,
   LOOPBACK_TEST_CREDENTIAL,
-  MODEL_API_KEY_ENV,
+  META_API_KEY_ENV,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
   resolveMuseEndpoint,
 } from "@adapters/speech/muse";
@@ -385,15 +385,16 @@ describe("Muse transport (local server)", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: false,
+      translationLoopbackEndpoint: false,
     });
     const outcome = await port({
       file: "input.wav",
       mode: "endpointing",
       keywords: [],
       json: false,
+      translate: false,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
-      env: {},
     });
     expect(outcome.isErr()).toBe(true);
     expect(server.connections).toBe(0);
@@ -455,7 +456,7 @@ describe("createMuseProviderFromEnv", () => {
   it("never forwards an operator credential to a loopback socket", async () => {
     server = new TestServer(happyScript());
     const created = createMuseProviderFromEnv({
-      [MODEL_API_KEY_ENV]: "REAL-OPERATOR-KEY-MUST-NOT-LEAVE",
+      [META_API_KEY_ENV]: "REAL-OPERATOR-KEY-MUST-NOT-LEAVE",
       [MUSE_TRANSCRIBE_ENDPOINT_ENV]: await server.url(),
     });
     expect(created.isOk()).toBe(true);
@@ -483,6 +484,16 @@ describe("createMuseProviderFromEnv", () => {
       [MUSE_TRANSCRIBE_ENDPOINT_ENV]: "ws://127.0.0.1:18923",
     });
     expect(created.isOk()).toBe(true);
+  });
+
+  it("rejects unsupported model selection and keeps provider credentials separate", () => {
+    const env = { URBUDDY_OPENAI_API_KEY: "wrong-provider-fixture" };
+    const unsupported = createMuseProviderFromEnv(env, "unsupported-model");
+    expect(unsupported.isErr() && unsupported.error.message).toBe("unsupported Muse speech model");
+    const missing = createMuseProviderFromEnv(env);
+    expect(missing.isErr() && missing.error.message).toContain("URBUDDY_META_API_KEY");
+    expect(JSON.stringify(missing)).not.toContain("wrong-provider-fixture");
+    expect(createMuseProviderFromEnv({ [META_API_KEY_ENV]: "speech-fixture" }).isOk()).toBe(true);
   });
 
   it("fails closed for the production endpoint without a credential", () => {

@@ -78,7 +78,7 @@ export default {
       from: { path: "^src/adapters" },
       to: {
         path: "^(src/modules|src/presentation|src/bootstrap)",
-        pathNot: "^src/modules/perception/(audio|speech|convert)",
+        pathNot: "^src/modules/(perception/(audio|speech|convert)|language/translation)",
       },
     },
     {
@@ -88,7 +88,7 @@ export default {
         "Adapters may implement public application-owned ports, but only as types; values stay domain-owned.",
       from: { path: "^src/adapters" },
       to: {
-        path: "^src/modules/perception/(audio|speech|convert)",
+        path: "^src/modules/(perception/(audio|speech|convert)|language/translation)",
         dependencyTypesNot: ["type-only"],
       },
     },

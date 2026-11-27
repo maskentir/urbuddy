@@ -557,7 +557,6 @@ describe("capture presentation", () => {
       json: false,
       signal: new AbortController().signal,
       output,
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes("signal=none"))).toBe(true);
@@ -593,7 +592,6 @@ describe("capture presentation", () => {
       json: true,
       signal: new AbortController().signal,
       output,
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.length).toBeGreaterThan(0);

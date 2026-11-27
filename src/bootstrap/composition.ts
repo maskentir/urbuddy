@@ -8,6 +8,11 @@ import {
   isLoopbackEndpoint,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
 } from "@adapters/speech/muse";
+import {
+  createTranslationProviderFromEnv,
+  isLoopbackTranslationEndpoint,
+  TRANSLATE_ENDPOINT_ENV,
+} from "@adapters/translation/openai";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -19,6 +24,7 @@ import {
   type SessionId,
 } from "@kernel/ids";
 import { ResourceScope } from "@kernel/lifecycle";
+import { loadOperationEnvironment } from "@modules/config/environment";
 import {
   loadSessionConfig,
   type ConfigFlags,
@@ -131,22 +137,31 @@ function cliDepsFrom(
       runSession: runCaptureSession,
       clock: app.clock,
       ...(isPermitted(app.policy, "spawn-child-process")
-        ? { spawnSource: spawnAudioSource, resolveHelper: resolveBundledHelperPath }
+        ? { spawnSource: spawnAudioSource, resolveHelper: () => resolveBundledHelperPath(env) }
         : {}),
     }),
     transcribePort: createTranscribePort({
       clock: app.clock,
+      env,
       loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
+      translationLoopbackEndpoint: isLoopbackTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV]),
       ...(isPermitted(app.policy, "network-egress")
         ? {
-            createProvider: createMuseProviderFromEnv,
-            openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
+            createProvider: (model) => createMuseProviderFromEnv(env, model),
+            createTranslator: (translation) => {
+              switch (translation.provider) {
+                case "openai":
+                  return createTranslationProviderFromEnv(env, translation.model);
+              }
+            },
+            openWav: (path, smokeFixtureOnly) =>
+              openWavSource(path, { pacing: "realtime", smokeFixtureOnly }),
           }
         : {}),
       ...(isPermitted(app.policy, "spawn-child-process")
         ? {
             spawnCapture: () => {
-              const helper = resolveBundledHelperPath(process.env);
+              const helper = resolveBundledHelperPath(env);
               if (helper.isErr()) {
                 return err(helper.error);
               }
@@ -222,7 +237,14 @@ export async function runApp(
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
-    const created = createAppContainer({ env, flags: extractGlobalFlags(argv) });
+    const { envFile, ...flags } = extractGlobalFlags(argv);
+    const operationEnvironment = loadOperationEnvironment(env, envFile);
+    if (operationEnvironment.isErr()) {
+      process.stderr.write(`${formatError(operationEnvironment.error)}\n`);
+      return EXIT_CODES.configError;
+    }
+    const resolvedEnv = operationEnvironment.value;
+    const created = createAppContainer({ env: resolvedEnv, flags });
     if (!isAppContainer(created)) {
       process.stderr.write(`${formatError(created.error)}\n`);
       return EXIT_CODES.configError;
@@ -232,7 +254,7 @@ export async function runApp(
       startApp(app);
       let code: ExitCode;
       try {
-        code = await runCli(argv, cliDepsFrom(app, work.signal, env));
+        code = await runCli(argv, cliDepsFrom(app, work.signal, resolvedEnv));
       } catch (thrown: unknown) {
         const error = toAppError(thrown, "unhandled CLI failure");
         app.logger.error(formatError(error));

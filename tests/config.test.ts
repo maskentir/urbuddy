@@ -1,8 +1,91 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { LOG_LEVELS, type LogLevel } from "@kernel/log-level";
+import { loadOperationEnvironment } from "@modules/config/environment";
 import { loadSessionConfig, PROFILES, type SessionConfig } from "@modules/config/loader";
+import { loadTranslationConfig } from "@modules/config/translation";
 import { defaultDenyPolicy, effectivePolicy, isPermitted } from "@modules/security/policy";
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
+
+describe("explicit operation environment", () => {
+  it("rejects non-regular and oversized file input", () => {
+    const directory = mkdtempSync(join(tmpdir(), "urbuddy-config-"));
+    try {
+      const file = join(directory, ".env");
+      writeFileSync(file, Buffer.alloc(64 * 1024 + 1));
+      for (const input of [directory, file]) {
+        const loaded = loadOperationEnvironment({}, input);
+        expect(loaded.isErr() && loaded.error.message).toBe(
+          "environment file must be regular and at most 64 KiB",
+        );
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads capability settings and provider keys only, with process and CLI precedence", () => {
+    const directory = mkdtempSync(join(tmpdir(), "urbuddy-config-"));
+    const file = join(directory, ".env");
+    try {
+      writeFileSync(
+        file,
+        [
+          "URBUDDY_STT_MODEL=muse-voice-transcribe-1.0",
+          "URBUDDY_TRANSLATION_SOURCE_LANGUAGE=ja",
+          "URBUDDY_TRANSLATION_TARGET_LANGUAGE=id",
+          "URBUDDY_META_API_KEY=speech-fixture",
+          "URBUDDY_OPENAI_API_KEY=file-translation-fixture",
+          "URBUDDY_ALLOW_EGRESS=1",
+          "URBUDDY_ALLOW_CHILD=1",
+          "URBUDDY_TRANSLATE_ENDPOINT=http://127.0.0.1:9",
+          "LANGCHAIN_TRACING=true",
+          "NODE_OPTIONS=--require=fixture",
+        ].join("\n"),
+        { mode: 0o600 },
+      );
+
+      const loaded = loadOperationEnvironment(
+        {
+          URBUDDY_TRANSLATION_TARGET_LANGUAGE: "ko",
+          URBUDDY_OPENAI_API_KEY: "process-translation-fixture",
+        },
+        file,
+      );
+      if (loaded.isErr()) {
+        throw new Error("fixture environment should load");
+      }
+      expect(loaded.value).toEqual({
+        URBUDDY_STT_MODEL: "muse-voice-transcribe-1.0",
+        URBUDDY_TRANSLATION_SOURCE_LANGUAGE: "ja",
+        URBUDDY_TRANSLATION_TARGET_LANGUAGE: "ko",
+        URBUDDY_META_API_KEY: "speech-fixture",
+        URBUDDY_OPENAI_API_KEY: "process-translation-fixture",
+      });
+      expect(Object.isFrozen(loaded.value)).toBe(true);
+      const translation = loadTranslationConfig(true, { targetLanguage: "zh-Hant" }, loaded.value);
+      expect(translation.isOk() && translation.value).toEqual({
+        enabled: true,
+        provider: "openai",
+        model: "gpt-6.1-terra",
+        sourceLanguage: "ja",
+        targetLanguage: "zh-Hant",
+      });
+      const disabled = loadTranslationConfig(false, {}, loaded.value);
+      expect(disabled.isOk() && disabled.value).toEqual({ enabled: false });
+      const session = loadSessionConfig({ env: loaded.value });
+      expect(session.isOk() && session.value).toMatchObject({
+        allowNetworkEgress: false,
+        allowChildProcesses: false,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("config loader", () => {
   it("loads defaults with no input and freezes the result", () => {

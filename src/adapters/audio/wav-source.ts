@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 
@@ -13,6 +14,7 @@ export interface WavInfo {
 
 export interface OpenWavOptions {
   readonly chunkFrames?: number;
+  readonly smokeFixtureOnly?: boolean;
   readonly pacing?: "realtime" | "none";
   readonly sleep?: (ms: number) => Promise<void>;
 }
@@ -21,6 +23,8 @@ const DEFAULT_CHUNK_FRAMES = 1_920;
 const MAX_CHUNK_FRAMES = 96_000;
 const HEADER_SCAN_BOUND = 1_048_576;
 const READ_BLOCK = 65_536;
+const SMOKE_PCM_BYTES = 96_000;
+const SMOKE_PCM_SHA256 = "f2a7976c8cf240b27df7b8201ae31040a67b319479d25073c83c8d786f1e3a28";
 
 interface LocatedWav {
   readonly info: WavInfo;
@@ -160,6 +164,7 @@ class WavCaptureSource implements CaptureSource {
     private readonly dataOffset: number,
     private readonly dataBytes: number,
     private readonly options: OpenWavOptions,
+    private readonly verifiedPcm?: Buffer,
   ) {}
 
   async *items(signal: AbortSignal): AsyncIterable<SourceItem> {
@@ -181,14 +186,20 @@ class WavCaptureSource implements CaptureSource {
         break;
       }
       const wanted = Math.min(chunkFrames, this.info.frames - framesRead);
-      const request = await readAt(this.handle, wanted * bytesPerFrame, position);
-      if (request.bytes.length === 0) {
+      const bytes =
+        this.verifiedPcm === undefined
+          ? (await readAt(this.handle, wanted * bytesPerFrame, position)).bytes
+          : this.verifiedPcm.subarray(
+              position - this.dataOffset,
+              position - this.dataOffset + wanted * bytesPerFrame,
+            );
+      if (bytes.length === 0) {
         throw appError("VALIDATION_FAILED", "WAV data ended before its declared extent");
       }
-      const completeFrames = Math.floor(request.bytes.length / bytesPerFrame);
+      const completeFrames = Math.floor(bytes.length / bytesPerFrame);
       const samples = new Float32Array(completeFrames * this.info.channels);
       for (let i = 0; i < samples.length; i += 1) {
-        samples[i] = request.bytes.readInt16LE(i * 2) / 32_768;
+        samples[i] = bytes.readInt16LE(i * 2) / 32_768;
       }
       seq += 1;
       yield {
@@ -274,12 +285,29 @@ export async function openWavSource(
       await handle.close().catch(() => undefined);
       return err(located.error);
     }
+    let verifiedPcm: Buffer | undefined;
+    if (options.smokeFixtureOnly) {
+      const { info, dataOffset, dataBytes } = located.value;
+      if (info.sampleRate === 24_000 && info.channels === 1 && dataBytes === SMOKE_PCM_BYTES) {
+        const { bytes } = await readAt(handle, SMOKE_PCM_BYTES, dataOffset);
+        if (createHash("sha256").update(bytes).digest("hex") === SMOKE_PCM_SHA256) {
+          verifiedPcm = bytes;
+        }
+      }
+      if (verifiedPcm === undefined) {
+        await handle.close();
+        return err(
+          appError("VALIDATION_FAILED", "bilingual loopback requires the synthetic smoke WAV"),
+        );
+      }
+    }
     const source = new WavCaptureSource(
       handle,
       located.value.info,
       located.value.dataOffset,
       located.value.dataBytes,
       { ...options, chunkFrames },
+      verifiedPcm,
     );
     return ok(Object.assign(source, { info: located.value.info }));
   } catch (thrown: unknown) {

@@ -3,25 +3,27 @@
 Pinned exactly; `pnpm-lock.yaml` is the integrity record (`pnpm ls`
 clean at adoption, reproducible via `pnpm install --frozen-lockfile`).
 Rule: a dependency is installed only when a component consumes it.
-Deferred libraries (p-queue, p-retry, execa, undici, ws,
+Deferred libraries (p-queue, p-retry, execa, undici,
 OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 
 ## Runtime
 
-| package        | version | license    | engines         | consumed by                                                      | owner               |
-| -------------- | ------- | ---------- | --------------- | ---------------------------------------------------------------- | ------------------- |
-| better-sqlite3 | 13.2.0  | MIT        | >=22            | `src/platform/persistence/store.ts` (native driver, lazy-loaded) | platform            |
-| drizzle-orm    | 0.45.4  | Apache-2.0 | none            | `src/platform/persistence/` schema + queries                     | platform            |
-| commander      | 15.1.0  | MIT        | >=22.12         | `src/presentation/cli.ts` (help/version/doctor/--json)           | presentation        |
-| env-paths      | 4.0.0   | MIT        | >=20            | `src/platform/paths.ts`                                          | platform            |
-| ink            | 8.0.0   | MIT        | >=22            | `src/presentation/ink-smoke.tsx`                                 | presentation        |
-| pino           | 10.4.0  | MIT        | none declared   | `src/platform/logging.ts` transport (policy wrapper)             | platform            |
-| neverthrow     | 8.2.0   | MIT        | >=18, zero deps | `Result` contracts in kernel/config/lifecycle                    | kernel              |
-| react          | 19.3.1  | MIT        | >=0.10          | Ink peer                                                         | presentation        |
-| strip-ansi     | 7.2.0   | MIT        | >=12            | `src/platform/output.ts` sanitize                                | platform            |
-| ts-pattern     | 5.9.2   | MIT        | none            | exhaustive command + exit-code dispatch                          | kernel/presentation |
-| zod            | 4.6.7   | MIT        | none            | config, resources, log-level schemas                             | kernel/modules      |
-| ws             | 8.23.0  | MIT        | >=10            | `src/adapters/speech/` WebSocket client + local test server      | adapters            |
+| package           | version | license    | engines         | consumed by                                                      | owner               |
+| ----------------- | ------- | ---------- | --------------- | ---------------------------------------------------------------- | ------------------- |
+| better-sqlite3    | 13.2.0  | MIT        | >=22            | `src/platform/persistence/store.ts` (native driver, lazy-loaded) | platform            |
+| drizzle-orm       | 0.45.4  | Apache-2.0 | none            | `src/platform/persistence/` schema + queries                     | platform            |
+| commander         | 15.1.0  | MIT        | >=22.12         | `src/presentation/cli.ts` (help/version/doctor/--json)           | presentation        |
+| @langchain/core   | 1.5.1   | MIT        | >=20            | model gateway contracts consumed by the translation adapter      | adapters            |
+| @langchain/openai | 1.8.5   | MIT        | >=22            | `src/adapters/translation/openai.ts` (ChatOpenAI transport)      | adapters            |
+| env-paths         | 4.0.0   | MIT        | >=20            | `src/platform/paths.ts`                                          | platform            |
+| ink               | 8.0.0   | MIT        | >=22            | `src/presentation/ink-smoke.tsx`                                 | presentation        |
+| pino              | 10.4.0  | MIT        | none declared   | `src/platform/logging.ts` transport (policy wrapper)             | platform            |
+| neverthrow        | 8.2.0   | MIT        | >=18, zero deps | `Result` contracts in kernel/config/lifecycle                    | kernel              |
+| react             | 19.3.1  | MIT        | >=0.10          | Ink peer                                                         | presentation        |
+| strip-ansi        | 7.2.0   | MIT        | >=12            | `src/platform/output.ts` sanitize                                | platform            |
+| ts-pattern        | 5.9.2   | MIT        | none            | exhaustive command + exit-code dispatch                          | kernel/presentation |
+| zod               | 4.6.7   | MIT        | none            | config, resources, log-level schemas                             | kernel/modules      |
+| ws                | 8.23.0  | MIT        | >=10            | `src/adapters/speech/` WebSocket client + local test server      | adapters            |
 
 ## Development
 
@@ -62,3 +64,33 @@ OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 | vite, react-devtools-core      | Peer-resolved transitively at install; not direct dependencies.                                                                                                                                |
 | vite-tsconfig-paths@6.1.1      | Tried for test-time alias resolution; removed after Vitest's native `resolve.tsconfigPaths` proved sufficient. Fewer deps win.                                                                 |
 | native Node WebSocket client   | Evaluated for the Muse adapter; rejected: no inbound payload bound, weak termination control for lifecycle tests, and no server for deterministic local protocol tests. `ws` covers all three. |
+
+The translation adapter uses direct LangChain Chat Completions invocation,
+strict completion and JSON validation, and an explicit tracing context. The
+application scheduler and evaluation runner use the same application-owned
+port and exchange no SDK types. See [ADR-007](decisions/007-live-language-engine.md)
+for the wire contract and acceptance status.
+
+For configuration, [Commander](https://github.com/tj/commander.js#options)
+already parses CLI options, [Node's `util.parseEnv`](https://nodejs.org/api/util.html#utilparseenvcontent)
+parses the explicitly selected file into an object, and [Zod](https://zod.dev/basics)
+validates the existing session schema. Urbuddy supplies the file allowlist,
+precedence, and operation-specific authorization checks.
+[c12](https://github.com/unjs/c12) adds discovery and configuration layers
+outside this contract. [envalid](https://github.com/af/envalid) handles typed
+environment validation, which overlaps with the existing validation path.
+[@t3-oss/env-core](https://env.t3.gg/docs/core) adds schema and server/client
+environment handling, and still requires a runtime environment input.
+The explicit file policy and capability boundaries would remain application
+code with any of these three packages.
+
+Translation admission keeps its slot until the owned provider promise settles.
+[p-queue](https://github.com/sindresorhus/p-queue#how-do-i-cancel-or-remove-a-queued-task)
+releases a running slot on abort and can let the underlying work continue.
+Native abortable timers handle drain deadlines while scheduler state tracks
+actual settlement. For the compiled smoke, native `execFile` captures
+output, handles spawn errors, and terminates a deadline-exceeding child.
+[Execa](https://github.com/sindresorhus/execa/blob/main/docs/api.md) adds
+explicit timeout classification and escalation. The smoke launches one Node
+child with an isolated environment and no descendant capture process, so
+the native primitive covers its lifecycle.

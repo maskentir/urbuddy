@@ -51,7 +51,7 @@ PR:
    loss or duplication). Met by
    [PR #7](https://github.com/maskentir/urbuddy/pull/7).
 
-## 3. Speech Perception — next
+## 3. Speech Perception — done
 
 Product outcome: real-time English transcription of live meetings,
 including accented and fast speech, with reconnect and gap accounting.
@@ -71,19 +71,37 @@ PR:
    [PR #8](https://github.com/maskentir/urbuddy/pull/8).
 2. Streaming speech recognition: real-time English transcription
    within the latency and loss budgets defined in
-   [architecture](./architecture.md). Implemented against a local
-   protocol server; live provider acceptance remains pending
-   owner-authorized execution.
+   [architecture](./architecture.md). Met by
+   [PR #10](https://github.com/maskentir/urbuddy/pull/10), including
+   owner-authorized live qualification (3/3 runs exit 0, zero reported
+   discontinuities). Retained limitations: rotation, long-session
+   endurance, production latency distribution, accuracy benchmarks.
 
-## 4. Live Language Engine — planned
+## 4. Live Language Engine — next
 
-Product outcome: reliable English–Indonesian translation that stays
-readable while speech is still in flight.
+Product outcome: contextual translation between configured languages that
+stays readable while speech is still in flight. Automatic source interpretation
+and Indonesian output are the initial personalized defaults. The owner
+accepted the initial experimental implementation. Neither comparison
+model met the frozen semantic gate.
 
 Dependencies: Speech Perception, Core Runtime.
 
 Scope: contextual translation, semantic units, provisional and
 committed outputs, revision control, glossary handling.
+
+**Approved experimental implementation scope.** Provide opt-in contextual
+translation of finalized source utterances using the evaluated v3 prompt
+and Terra as the configurable model default. Continue displaying
+original partial transcripts. Provisional translation and snapshot
+policies remain experimental.
+
+The owner approved an exception to allow merging the experimental
+implementation before qualification, subject to final review of PR #11.
+The semantic acceptance gate and real-time product outcome still apply.
+Human bilingual adjudication, sustained committed throughput, end-to-end
+latency, and useful provisional translation remain outstanding release
+requirements. [Model selection and evidence](../evaluation/language/model-selection.md)
 
 Non-goals: general-purpose chat, summarization.
 

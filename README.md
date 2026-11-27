@@ -13,11 +13,15 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 
 ## Status
 
-Application Foundation and Core Runtime are merged (`0.1.0`);
-Speech Perception native audio acquisition is merged, and streaming
-speech recognition is implemented against a local protocol server
-(live provider acceptance pending owner authorization). See
-[docs/roadmap.md](./docs/roadmap.md) for milestones and acceptance gates.
+Application Foundation and Core Runtime are merged. Speech Perception
+completed its initial implementation gate, including an owner-authorized
+Muse run series. Production latency, rotation, endurance, and recognition
+accuracy remain open. The Live Language Engine experimental implementation
+was accepted for opt-in translation of finalized utterances and awaits
+final merge review. Neither Luna nor Terra met the frozen semantic
+criteria. Human bilingual review, sustained committed throughput,
+end-to-end latency, and useful provisional translation remain open.
+See the [roadmap](./docs/roadmap.md) and [translation evaluation guide](./evaluation/language/README.md).
 
 ## The problem
 
@@ -39,7 +43,7 @@ captured output.
 
 ## Capabilities
 
-<p align="center"><img src="assets/brand/capabilities.svg" width="100%" alt="Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; foundation shipped in 0.1.0." /></p>
+<p align="center"><img src="assets/brand/capabilities.svg" width="100%" alt="Capabilities. Initial speech transcription implemented, contextual translation in progress, catch-up and vocabulary planned." /></p>
 
 Four planned capabilities, one per product workflow
 ([docs/product.md](./docs/product.md)): live bilingual captions,
@@ -91,7 +95,7 @@ pnpm native:build # macOS only; builds the audio capture helper
 pnpm exec tsx src/bootstrap/main.ts capture --synthetic-frames 200 --duration 10 --allow-child
 # Streaming transcription needs a credential and explicit egress. WAV
 # input is paced as a live stream; live capture also needs --allow-child.
-MODEL_API_KEY=<key> pnpm exec tsx src/bootstrap/main.ts transcribe --file <wav> --allow-egress
+pnpm exec tsx src/bootstrap/main.ts --env-file .env transcribe --file sample.wav --allow-egress
 ```
 
 ### Scripts
@@ -121,8 +125,10 @@ MODEL_API_KEY=<key> pnpm exec tsx src/bootstrap/main.ts transcribe --file <wav> 
 | `src/modules/security`       | Default-deny security policy                             | [security](./src/modules/security)            |
 | `src/modules/session`        | Session runtime: ordering, revisions, gaps               | [session](./src/modules/session)              |
 | `src/modules/perception`     | Audio contracts and capture orchestration                | [perception](./src/modules/perception)        |
+| `src/modules/language`       | Translation units, scheduling, glossary                  | —                                             |
 | `src/adapters/audio`         | Native helper supervision and frame decoding             | [audio](./src/adapters/audio)                 |
 | `src/adapters/speech`        | Muse streaming speech provider (WebSocket)               | [speech](./src/adapters/speech)               |
+| `src/adapters/translation`   | OpenAI translation provider (LangChain)                  | —                                             |
 | `native/audio-capture-macos` | Swift Core Audio Tap helper (macOS, `pnpm native:build`) | [audio-capture](./native/audio-capture-macos) |
 | `src/platform`               | Infrastructure, logging, paths, and output               | [platform](./src/platform)                    |
 | `src/presentation`           | Commander CLI and Ink terminal                           | [presentation](./src/presentation)            |
@@ -142,21 +148,60 @@ deterministic) regenerates the artwork via `pnpm brand`.
 
 Configuration precedence, highest priority last:
 
-built-in defaults → environment variables → CLI flags → profile
-security ceiling → validated session configuration.
+built-in defaults → explicitly selected environment file → process environment →
+explicit CLI flags. Effective permissions remain subject to the profile ceiling.
 
 A profile can only restrict: no flag, variable, or profile grants a
 permission the ceiling denies. Forbidden grants fail fast.
 
-| Environment variable          | CLI override                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `URBUDDY_PROFILE`             | `--profile`                                                                                              |
-| `URBUDDY_LOG_LEVEL`           | `--log-level`                                                                                            |
-| `URBUDDY_DATA_ROOT`           | `--data-root`                                                                                            |
-| `URBUDDY_ALLOW_EGRESS`        | `--allow-egress`                                                                                         |
-| `URBUDDY_ALLOW_CHILD`         | `--allow-child`                                                                                          |
-| `URBUDDY_AUDIO_HELPER`        | (no flag; absolute path override for the native helper binary)                                           |
-| `URBUDDY_TRANSCRIBE_ENDPOINT` | (no flag; loopback-only WebSocket URL for local smoke/test servers; production uses `wss://api.meta.ai`) |
+| Environment variable                  | CLI override                                                                                             |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `URBUDDY_PROFILE`                     | `--profile`                                                                                              |
+| `URBUDDY_LOG_LEVEL`                   | `--log-level`                                                                                            |
+| `URBUDDY_DATA_ROOT`                   | `--data-root`                                                                                            |
+| `URBUDDY_ALLOW_EGRESS`                | `--allow-egress`                                                                                         |
+| `URBUDDY_ALLOW_CHILD`                 | `--allow-child`                                                                                          |
+| `URBUDDY_AUDIO_HELPER`                | (no flag; absolute path override for the native helper binary)                                           |
+| `URBUDDY_TRANSCRIBE_ENDPOINT`         | (no flag; loopback-only WebSocket URL for local smoke/test servers; production uses `wss://api.meta.ai`) |
+| `URBUDDY_STT_PROVIDER`                | `--provider` (Muse)                                                                                      |
+| `URBUDDY_STT_MODEL`                   | `--stt-model` (`muse-voice-transcribe-1.0`)                                                              |
+| `URBUDDY_TRANSLATION_PROVIDER`        | `--translation-provider`                                                                                 |
+| `URBUDDY_TRANSLATION_MODEL`           | `--translation-model`                                                                                    |
+| `URBUDDY_TRANSLATION_SOURCE_LANGUAGE` | `--source-language`                                                                                      |
+| `URBUDDY_TRANSLATION_TARGET_LANGUAGE` | `--target-language`                                                                                      |
+| `URBUDDY_META_API_KEY`                | Provider credential with no CLI argument                                                                 |
+| `URBUDDY_OPENAI_API_KEY`              | Provider credential with no CLI argument                                                                 |
+| `URBUDDY_TRANSLATE_ENDPOINT`          | (no flag; loopback-only HTTP URL for local smoke/test servers; production uses `https://api.openai.com`) |
+
+Create the local file only if `.env` is absent.
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+Supply the provider keys locally. Migrate `MODEL_API_KEY` to
+`URBUDDY_META_API_KEY` and `OPENAI_API_KEY` to `URBUDDY_OPENAI_API_KEY`.
+Remove the legacy names after migration. An explicitly empty process value
+overrides the file value. The local file is plaintext and ignored by Git.
+Keep it private. Urbuddy reads it only when named with `--env-file`. The
+file accepts the eight variables in [the example](.env.example). Authorization,
+endpoint overrides, Node options, and tracing cannot be configured through it.
+
+Translation requires `--translate` and effective egress. The provider and
+language values alone leave it off. It sends finalized utterances for
+experimental translation with the evaluated v3 prompt and defaults to
+`gpt-6.1-terra`. Existing configured model overrides still take
+precedence. Original partial transcripts remain visible. Muse
+recognition settings are independent of translation source interpretation.
+
+```sh
+pnpm build
+node dist/bootstrap/main.js --env-file .env transcribe --translate --allow-egress --allow-child
+```
+
+Use `--allow-child` for native capture. See [translation contracts](docs/decisions/007-live-language-engine.md)
+and the [authored evaluation corpus](evaluation/language/README.md) for model and test scope.
 
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit

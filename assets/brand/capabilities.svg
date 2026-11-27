@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" role="img" aria-label="Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; the fixed strip names the implemented scope.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" role="img" aria-label="Capabilities. Initial speech transcription implemented, contextual translation in progress, catch-up and vocabulary planned.">
 <title>Urbuddy capabilities</title>
 <style>
 .rise{transform-box:fill-box;transform-origin:center;animation:rise .5s cubic-bezier(.2,1.4,.4,1) both}
@@ -20,18 +20,18 @@
 <g class="rise" style="animation-delay:0.00s"><g transform="rotate(-1.2 241 83)">
 <polygon points="36,24 446,32 436,142 42,134" fill="#151515"/>
 <text x="56" y="62" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">LIVE CAPTIONS</text>
-<text x="56" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">bilingual streaming panels,</text>
-<text x="56" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">revision-stable</text>
+<text x="56" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">streaming transcription,</text>
+<text x="56" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">explicit gap reporting</text>
 
-<g transform="rotate(-4 380 49)"><rect x="324" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="334" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+<g transform="rotate(-4 380 49)"><rect x="324" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="334" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">INITIAL</text></g>
 </g></g>
 <g class="rise" style="animation-delay:0.12s"><g transform="rotate(1.2 659 83)">
 <polygon points="454,24 864,32 854,142 460,134" fill="#151515"/>
 <text x="474" y="62" font-family="Impact,'Arial Black','Franklin Gothic Medium',sans-serif" font-size="25" fill="#BAF52E" textLength="250" lengthAdjust="spacingAndGlyphs">TRANSLATION</text>
-<text x="474" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">contextual EN to ID,</text>
-<text x="474" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">negation-safe</text>
+<text x="474" y="92" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">configurable languages,</text>
+<text x="474" y="114" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" fill="#F4F0DF">contextual translation</text>
 
-<g transform="rotate(-4 798 49)"><rect x="742" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
+<g transform="rotate(-4 798 49)"><rect x="742" y="36" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">NEXT</text></g>
 </g></g>
 <g class="rise" style="animation-delay:0.24s"><g transform="rotate(-1.2 241 217)">
 <polygon points="36,158 446,166 436,276 42,268" fill="#151515"/>
@@ -49,5 +49,5 @@
 
 <g transform="rotate(-4 798 183)"><rect x="742" y="170" width="108" height="27" fill="#F4F0DF" stroke="#151515" stroke-width="3"/><text x="752" y="190" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#151515">PLANNED</text></g>
 </g></g>
-<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515" textLength="790" lengthAdjust="spacingAndGlyphs">SHIPPED: typed errors, config, lifecycle, CLI, smoke</text></g>
+<g class="rise" style="animation-delay:.5s"><rect x="36" y="296" width="828" height="56" fill="#BAF52E"/><rect x="36" y="296" width="828" height="56" fill="none" stroke="#151515" stroke-width="5"/><text x="56" y="331" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="700" fill="#151515" textLength="790" lengthAdjust="spacingAndGlyphs">IMPLEMENTED: runtime, evidence replay, streaming speech</text></g>
 </svg>

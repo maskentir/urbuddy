@@ -18,7 +18,6 @@ export interface CaptureInput {
   readonly json: boolean;
   readonly signal: AbortSignal;
   readonly output: CliOutput;
-  readonly env: Readonly<Record<string, string | undefined>>;
 }
 
 export type CapturePort = (input: CaptureInput) => Promise<Result<CaptureSummary, AppError>>;
@@ -31,9 +30,7 @@ export interface CaptureDeps {
     readonly syntheticFrames?: number;
     readonly maxBufferedBytes?: number;
   }) => Result<CaptureSource, AppError>;
-  readonly resolveHelper?: (
-    env: Readonly<Record<string, string | undefined>>,
-  ) => Result<string, AppError>;
+  readonly resolveHelper?: () => Result<string, AppError>;
 }
 
 function formatDb(rms: number): string {
@@ -75,7 +72,7 @@ export function createCapturePort(deps: CaptureDeps): CapturePort {
     }
     const synthetic = input.syntheticFrames ?? 0;
     try {
-      const helperPath = deps.resolveHelper(input.env);
+      const helperPath = deps.resolveHelper();
       if (helperPath.isErr()) {
         return err(helperPath.error);
       }

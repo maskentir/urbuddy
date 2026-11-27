@@ -1,8 +1,8 @@
 # Product vision
 
 Urbuddy is a production-grade, single-user-first, local-first personal
-language intelligence application for non-native English-speaking
-professionals.
+multilingual language intelligence application. Its initial audience is
+non-native English-speaking professionals.
 
 Its mission is to help users perceive, understand, communicate,
 remember, and learn from real conversations. The primary use case is a
@@ -13,6 +13,10 @@ assistance, and adaptive language learning.
 The long-term objective is increased user independence: the user
 becomes able to understand and speak English without assistance,
 instead of depending on the tool permanently.
+
+Personalized defaults belong in configuration. Source and target languages
+are user-facing choices, and capability claims depend on qualification for
+the relevant language and workflow.
 
 ## Target user
 

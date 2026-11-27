@@ -1,3 +1,4 @@
+import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { Server as NetServer, Socket as NetSocket } from "node:net";
 import { join } from "node:path";
@@ -412,6 +413,7 @@ describe("handshake readiness", () => {
   });
 
   it("delays audio until a late reconnect acknowledgement arrives", async () => {
+    const reconnecting = new EventEmitter();
     let ackAt = 0;
     const binaryAt: number[] = [];
     server = new SpeechTestServer(({ socket, index }) => {
@@ -442,16 +444,43 @@ describe("handshake readiness", () => {
         }
       });
     });
-    const provider = providerFor(await server.url(), { reconnectBackoffMs: [10] });
+    const provider = providerFor(await server.url(), {
+      sleep: async () => {
+        reconnecting.emit("backoff");
+      },
+    });
+    const source: CaptureSource = {
+      ...trackedSource([]),
+      async *items(signal) {
+        yield formatItem();
+        const backoff = once(reconnecting, "backoff", { signal }).then(
+          () => true,
+          () => false,
+        );
+        yield audioItem(1, 0);
+        if (await backoff) {
+          yield audioItem(2, 480);
+          yield endItem(3, 2);
+        }
+      },
+    };
     const outcome = await runTranscription({
-      source: pacedSource(20, 25),
+      source,
       provider,
-      signal: new AbortController().signal,
+      signal: AbortSignal.timeout(4_000),
       mode: "endpointing",
       keywords: [],
       onEvent: async () => {},
     });
-    expect(outcome.isOk()).toBe(true);
+    expect(
+      outcome.isOk() ? null : outcome.error,
+      JSON.stringify({
+        connections: server.connections,
+        ackAt,
+        binaryAt,
+      }),
+    ).toBeNull();
+    expect(server.connections).toBe(2);
     expect(binaryAt.length).toBeGreaterThan(0);
     expect(binaryAt.every((at) => at >= ackAt)).toBe(true);
   });
@@ -781,19 +810,23 @@ describe("termination and reconnect ownership", () => {
     if (opened.isErr()) {
       return;
     }
-    await opened.value.endInput();
-    let failure: unknown;
-    const seen: string[] = [];
     try {
-      for await (const event of opened.value.events()) {
-        seen.push(event.type);
-      }
-    } catch (thrown: unknown) {
-      failure = thrown;
+      expect((await opened.value.endInput()).isOk()).toBe(true);
+      await server.closed;
+      const seen: string[] = [];
+      const consume = async (): Promise<void> => {
+        for await (const event of opened.value.events()) {
+          seen.push(event.type);
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({
+        code: "INTERNAL",
+        message: "speech event queue exceeded its bound",
+      });
+      expect(seen).toContain("progress");
+    } finally {
+      await opened.value.terminate();
     }
-    expect(failure).toBeDefined();
-    expect(seen).toContain("progress");
-    await opened.value.terminate();
   });
 
   it("bounds reconnect attempts and then fails", async () => {
@@ -1556,6 +1589,7 @@ describe("transcription continuity and cleanup", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: false,
+      translationLoopbackEndpoint: false,
       createProvider: () => {
         const session = new FakeSpeechSession(async function* () {});
         return ok({
@@ -1571,6 +1605,7 @@ describe("transcription continuity and cleanup", () => {
       mode: "endpointing",
       keywords: [],
       json: true,
+      translate: false,
       signal: new AbortController().signal,
       output: {
         out: (line: string) => {
@@ -1580,7 +1615,6 @@ describe("transcription continuity and cleanup", () => {
           errLines.push(line);
         },
       },
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(errLines.some((line) => line.includes("disclosure"))).toBe(true);
@@ -1592,6 +1626,7 @@ describe("transcription continuity and cleanup", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: true,
+      translationLoopbackEndpoint: true,
       createProvider: () => {
         const session = new FakeSpeechSession(async function* () {});
         return ok({
@@ -1610,9 +1645,9 @@ describe("transcription continuity and cleanup", () => {
       mode: "endpointing",
       keywords: [],
       json: false,
+      translate: false,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
-      env: {},
     });
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {

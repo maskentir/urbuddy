@@ -20,7 +20,10 @@ when a material product or architecture decision changes.
 
 - Prefer the simplest correct implementation.
 - Apply KISS, YAGNI, and DRY.
-- Prefer native runtime capabilities and established libraries over custom infrastructure.
+- Before building non-domain infrastructure, inspect existing dependencies and native
+  capabilities, then evaluate maintained libraries against the concrete requirements.
+  Choose the lowest total complexity and maintenance burden. Use existing capabilities
+  directly and write custom code only for gaps they cannot cover.
 - Prefer composition and explicit dependencies.
 - Introduce abstractions only when they satisfy concrete requirements.
 - Delete obsolete, redundant, and unnecessary code.

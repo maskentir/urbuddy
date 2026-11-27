@@ -157,7 +157,7 @@ export function spawnAudioSource(input: SpawnAudioSourceInput): Result<CaptureSo
     return err(validated.error);
   }
   try {
-    const child = spawn(input.helperPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(input.helperPath, args, { env: {}, stdio: ["ignore", "pipe", "pipe"] });
     return ok(new ChildCaptureSource(child, maxBuffered, shutdownTimeoutMs));
   } catch (thrown: unknown) {
     return err(

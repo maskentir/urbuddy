@@ -55,6 +55,7 @@ export type TranscriptEvent =
   | {
       readonly type: "partial";
       readonly utteranceId: string;
+      readonly sourceSequence?: number;
       readonly revision: number;
       readonly text: string;
       readonly speaker?: string;
@@ -62,6 +63,7 @@ export type TranscriptEvent =
   | {
       readonly type: "final";
       readonly utteranceId: string;
+      readonly sourceSequence?: number;
       readonly revision: number;
       readonly text: string;
       readonly speaker?: string;
@@ -88,6 +90,7 @@ export interface TranscriptionSummary {
 
 interface TurnState {
   readonly utteranceId: string;
+  readonly sourceSequence: number;
   revision: number;
   text: string;
   speaker?: string;
@@ -202,6 +205,7 @@ export class TranscriptReducer {
         return ok({
           type: "partial",
           utteranceId: turn.utteranceId,
+          sourceSequence: turn.sourceSequence,
           revision: turn.revision,
           text: turn.text,
           ...(turn.speaker === undefined ? {} : { speaker: turn.speaker }),
@@ -227,6 +231,7 @@ export class TranscriptReducer {
         return ok({
           type: "final",
           utteranceId: turn.utteranceId,
+          sourceSequence: turn.sourceSequence,
           revision: turn.revision,
           text: turn.text,
           ...(turn.speaker === undefined ? {} : { speaker: turn.speaker }),
@@ -258,6 +263,7 @@ export class TranscriptReducer {
     this.utteranceCounter += 1;
     const created: TurnState = {
       utteranceId: `epoch-${this.epoch}-turn-${this.utteranceCounter}`,
+      sourceSequence: this.utteranceCounter,
       revision: 0,
       text: "",
       finalized: false,

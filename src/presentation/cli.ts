@@ -128,6 +128,7 @@ export function exitCodeForError(error: AppError): ExitCode {
 }
 
 interface GlobalOptionValues {
+  readonly envFile?: string;
   readonly profile?: string;
   readonly logLevel?: string;
   readonly dataRoot?: string;
@@ -138,6 +139,7 @@ interface GlobalOptionValues {
 
 function addGlobalOptions(program: Command): Command {
   return program
+    .option("--env-file <path>", "load capability settings and credentials from an explicit file")
     .option(
       "--profile <name>",
       "session profile (development|simulation|evaluation|personal|offline)",
@@ -160,10 +162,16 @@ function toConfigFlags(values: GlobalOptionValues): ConfigFlags {
   };
 }
 
-export function extractGlobalFlags(argv: readonly string[]): ConfigFlags {
+export function extractGlobalFlags(
+  argv: readonly string[],
+): ConfigFlags & { readonly envFile?: string } {
   const probe = addGlobalOptions(new Command());
   probe.parseOptions([...argv]);
-  return toConfigFlags(probe.opts<GlobalOptionValues>());
+  const values = probe.opts<GlobalOptionValues>();
+  return {
+    ...toConfigFlags(values),
+    ...(values.envFile === undefined ? {} : { envFile: values.envFile }),
+  };
 }
 
 export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Command {
@@ -246,7 +254,6 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
         json: options.json,
         signal: deps.signal,
         output,
-        env: process.env,
       };
       const result = await deps.capturePort(captureInput);
       if (result.isErr()) {
@@ -257,26 +264,39 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
   program
     .command("transcribe")
     .description(commandHelp("transcribe"))
-    .option("--provider <name>", "speech provider (muse)", "muse")
+    .option("--provider <name>", "speech provider (muse)")
+    .option("--stt-model <id>", "supported speech model")
     .option("--file <wav>", "transcribe a local WAV file paced as a live stream")
     .option("--duration <seconds>", "live capture duration in seconds (1 to 300)", "30")
     .option("--mode <mode>", "recognition mode (endpointing or diarization)", "endpointing")
     .option("--keywords <terms>", "comma-separated vocabulary biasing terms")
     .option("--json", "emit one stable JSON object per line", false)
+    .option(
+      "--translate",
+      "translate finalized speech experimentally (requires --allow-egress)",
+      false,
+    )
+    .option("--source-language <tag>", "translation source language tag or auto")
+    .option("--target-language <tag>", "translation target language tag")
+    .option("--translation-provider <name>", "translation provider")
+    .option("--translation-model <id>", "compatible translation model")
     .action(
       async (options: {
-        provider: string;
+        provider?: string;
+        sttModel?: string;
         file?: string;
         duration: string;
         mode: string;
         keywords?: string;
         json: boolean;
+        translate: boolean;
+        sourceLanguage?: string;
+        targetLanguage?: string;
+        translationProvider?: string;
+        translationModel?: string;
       }) => {
         if (deps.transcribePort === undefined) {
           throw new Error("transcribe is not wired");
-        }
-        if (options.provider !== "muse") {
-          throw appError("VALIDATION_FAILED", "only the muse provider is implemented");
         }
         if (options.mode !== "endpointing" && options.mode !== "diarization") {
           throw appError("VALIDATION_FAILED", "transcribe mode must be endpointing or diarization");
@@ -308,9 +328,25 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
           mode: options.mode,
           keywords,
           json: options.json,
+          translate: options.translate,
+          ...(options.provider === undefined ? {} : { sttProvider: options.provider }),
+          ...(options.sttModel === undefined ? {} : { sttModel: options.sttModel }),
+          translationFlags: {
+            ...(options.sourceLanguage === undefined
+              ? {}
+              : { sourceLanguage: options.sourceLanguage }),
+            ...(options.targetLanguage === undefined
+              ? {}
+              : { targetLanguage: options.targetLanguage }),
+            ...(options.translationProvider === undefined
+              ? {}
+              : { translationProvider: options.translationProvider }),
+            ...(options.translationModel === undefined
+              ? {}
+              : { translationModel: options.translationModel }),
+          },
           signal: deps.signal,
           output,
-          env: process.env,
         };
         const result = await deps.transcribePort(transcribeInput);
         if (result.isErr()) {

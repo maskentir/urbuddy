@@ -122,13 +122,17 @@ export function isLoopbackEndpoint(raw: string | undefined): boolean {
   }
 }
 
-export const MODEL_API_KEY_ENV = "MODEL_API_KEY";
+export const META_API_KEY_ENV = "URBUDDY_META_API_KEY";
 
 export const LOOPBACK_TEST_CREDENTIAL = "loopback-test-credential";
 
 export function createMuseProviderFromEnv(
   env: Readonly<Record<string, string | undefined>>,
+  model = MUSE_MODEL_ID,
 ): Result<SpeechProvider, AppError> {
+  if (model !== MUSE_MODEL_ID) {
+    return err(appError("CONFIG_INVALID", "unsupported Muse speech model"));
+  }
   const endpoint = resolveMuseEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]);
   if (endpoint.isErr()) {
     return err(endpoint.error);
@@ -141,12 +145,12 @@ export function createMuseProviderFromEnv(
       }),
     );
   }
-  const apiKey = env[MODEL_API_KEY_ENV];
+  const apiKey = env[META_API_KEY_ENV];
   if (apiKey === undefined || apiKey.trim().length === 0) {
     return err(
       appError(
         "CONFIG_INVALID",
-        "speech provider credential is not configured (set MODEL_API_KEY)",
+        "speech provider credential is not configured (set URBUDDY_META_API_KEY)",
       ),
     );
   }
