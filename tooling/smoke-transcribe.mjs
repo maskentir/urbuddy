@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -168,6 +169,73 @@ function handshakeMode(text) {
   }
 }
 
+function lastSourceBlock(userText) {
+  const open = userText.lastIndexOf("<source>");
+  if (open === -1) {
+    return userText;
+  }
+  const close = userText.indexOf("</source>", open);
+  if (close === -1) {
+    return userText;
+  }
+  return userText.slice(open + "<source>".length, close);
+}
+
+function startTranslationStub() {
+  const requests = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+    req.on("end", () => {
+      let source = "";
+      try {
+        const parsed = JSON.parse(body);
+        const userMessage = (parsed.messages ?? []).find((m) => m.role === "user");
+        source = lastSourceBlock(userMessage?.content ?? "");
+      } catch {
+        source = "";
+      }
+      const translation = `ID-SMOKE: ${source}`;
+      requests.push({
+        url: req.url,
+        authorization: req.headers["authorization"],
+        model: (() => {
+          try {
+            return JSON.parse(body).model;
+          } catch {
+            return undefined;
+          }
+        })(),
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "smoke-translation",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-6-luna",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: JSON.stringify({ translation }) },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }),
+      );
+    });
+  });
+  const listening = new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  server.listen(0, "127.0.0.1");
+  return { server, listening, requests };
+}
+
 const FORBIDDEN_FLAGS = ["--allow-child", "--persist", "--data-root"];
 
 function childEnv(extra) {
@@ -314,6 +382,112 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   return assertions.every((a) => a.pass);
 }
 
+async function bilingualRun({ fixture, port, translatePort, translateStub, label }) {
+  const name = `transcribe-${label}`;
+  const args = [
+    "transcribe",
+    "--file",
+    fixture.path,
+    "--allow-egress",
+    "--mode",
+    "endpointing",
+    "--json",
+    "--translate",
+  ];
+  const result = await runCli(
+    args,
+    childEnv({
+      args,
+      env: {
+        URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}`,
+        URBUDDY_TRANSLATE_ENDPOINT: `http://127.0.0.1:${translatePort}`,
+      },
+    }),
+    120_000,
+  );
+  const stdoutPath = writeEvidence(`${name}.stdout.txt`, result.stdout);
+  const stderrPath = writeEvidence(`${name}.stderr.txt`, result.stderr);
+  const assertions = [];
+  check(assertions, "exit-code-0", result.code === 0, `code=${result.code}`);
+  check(assertions, "no-timeout", !result.timedOut, "");
+  let complete = null;
+  let translationComplete = null;
+  let parseOk = true;
+  for (const line of result.stdout.split("\n").filter((l) => l.trim().length > 0)) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "complete") {
+        complete = event;
+      }
+      if (event.type === "translation-complete") {
+        translationComplete = event;
+      }
+    } catch {
+      parseOk = false;
+    }
+  }
+  check(assertions, "ndjson-parseable", parseOk, "");
+  check(assertions, "english-final-present", result.stdout.includes("Smoke final."), "");
+  check(
+    assertions,
+    "indonesian-committed-present",
+    result.stdout.includes("ID-SMOKE: Smoke final."),
+    "",
+  );
+  check(
+    assertions,
+    "translation-summary",
+    translationComplete !== null &&
+      translationComplete.committed >= 1 &&
+      translationComplete.failed === false,
+    JSON.stringify(translationComplete),
+  );
+  check(
+    assertions,
+    "complete-carries-translation",
+    complete !== null && complete.translation !== undefined && complete.translation.committed >= 1,
+    JSON.stringify(complete),
+  );
+  check(
+    assertions,
+    "translation-request-sent",
+    translateStub.requests.length >= 1,
+    `requests=${translateStub.requests.length}`,
+  );
+  check(
+    assertions,
+    "translation-uses-sentinel-credential",
+    translateStub.requests.length >= 1 &&
+      translateStub.requests.every(
+        (r) => r.authorization === "Bearer loopback-translate-credential",
+      ),
+    JSON.stringify(translateStub.requests.map((r) => r.authorization)),
+  );
+  check(
+    assertions,
+    "translation-pinned-model",
+    translateStub.requests.length >= 1 &&
+      translateStub.requests.every((r) => r.model === "gpt-6-luna"),
+    JSON.stringify(translateStub.requests.map((r) => r.model)),
+  );
+  manifest.runs.push({
+    name,
+    args,
+    env: {
+      endpoint: "loopback",
+      translationEndpoint: "loopback-stub",
+      credential: "none-sentinel-only",
+      isolation: "allowlist",
+    },
+    exitCode: result.code,
+    durationMs: result.durationMs,
+    stdoutPath,
+    stderrPath,
+    assertions,
+  });
+  return assertions.every((a) => a.pass);
+}
+
 async function denialRun({ name, args, extraEnv, expectCode, endpoint }) {
   const result = await runCli(args, childEnv({ args, env: extraEnv }), 30_000);
   const stdoutPath = writeEvidence(`${name}.stdout.txt`, result.stdout);
@@ -345,11 +519,16 @@ async function denialRun({ name, args, extraEnv, expectCode, endpoint }) {
 
 const fixture = makeWavFixture();
 const server = startServer();
+const translateStub = startTranslationStub();
 let allPass = true;
 try {
   await server.listening;
+  await translateStub.listening;
   const address = server.wss.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
+  const translateAddress = translateStub.server.address();
+  const translatePort =
+    typeof translateAddress === "object" && translateAddress !== null ? translateAddress.port : 0;
 
   allPass =
     (await positiveRun({
@@ -371,9 +550,26 @@ try {
     })) && allPass;
 
   allPass =
+    (await bilingualRun({
+      fixture,
+      port,
+      translatePort,
+      translateStub,
+      label: "bilingual-endpointing-json",
+    })) && allPass;
+
+  allPass =
     (await denialRun({
       name: "deny-no-egress",
       args: ["transcribe", "--file", fixture.path],
+      extraEnv: {},
+      expectCode: 3,
+      endpoint: "n/a",
+    })) && allPass;
+  allPass =
+    (await denialRun({
+      name: "deny-translate-no-egress",
+      args: ["transcribe", "--file", fixture.path, "--translate"],
       extraEnv: {},
       expectCode: 3,
       endpoint: "n/a",
@@ -422,6 +618,7 @@ try {
   manifest.pass = allPass;
   writeEvidence("manifest.json", JSON.stringify(manifest, null, 2));
   await new Promise((done) => server.wss.close(() => done()));
+  await new Promise((done) => translateStub.server.close(() => done()));
 }
 
 console.log(`smoke-transcribe: ${allPass ? "PASS" : "FAIL"} evidence=${evidenceDir}`);

@@ -385,12 +385,14 @@ describe("Muse transport (local server)", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: false,
+      translationLoopbackEndpoint: false,
     });
     const outcome = await port({
       file: "input.wav",
       mode: "endpointing",
       keywords: [],
       json: false,
+      translate: false,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
       env: {},

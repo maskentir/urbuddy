@@ -17,7 +17,7 @@ export function commandHelp(name: CommandName): string {
     .with(
       "transcribe",
       () =>
-        "transcribe [--file wav]  stream speech recognition via Muse (requires --allow-egress; live also --allow-child)",
+        "transcribe [--file wav]  stream speech recognition via Muse (requires --allow-egress; live also --allow-child; --translate adds Indonesian via OpenAI)",
     )
     .exhaustive();
 }

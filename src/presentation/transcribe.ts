@@ -1,5 +1,11 @@
 import type { Clock } from "@kernel/clock";
 import { appError, toAppError, type AppError } from "@kernel/errors";
+import {
+  TranslationScheduler,
+  type TranslationEvent,
+  type TranslationProvider,
+  type TranslationSummary,
+} from "@modules/language/translation";
 import type { CaptureSource } from "@modules/perception/audio";
 import {
   runTranscription,
@@ -9,7 +15,7 @@ import {
   type TranscriptionSummary,
 } from "@modules/perception/speech";
 import { stripFormatting } from "@platform/output";
-import { err, type Result } from "neverthrow";
+import { err, ok, type Result } from "neverthrow";
 
 import type { CliOutput } from "./output.js";
 
@@ -19,21 +25,30 @@ export interface TranscribeInput {
   readonly mode: SpeechMode;
   readonly keywords: readonly string[];
   readonly json: boolean;
+  readonly translate: boolean;
   readonly signal: AbortSignal;
   readonly output: CliOutput;
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
+type BilingualSummary = TranscriptionSummary & {
+  readonly translation?: TranslationSummary;
+};
+
 export type TranscribePort = (
   input: TranscribeInput,
-) => Promise<Result<TranscriptionSummary, AppError>>;
+) => Promise<Result<BilingualSummary, AppError>>;
 
 export interface TranscribeDeps {
   readonly clock: Clock;
   readonly loopbackEndpoint: boolean;
+  readonly translationLoopbackEndpoint: boolean;
   readonly createProvider?: (
     env: Readonly<Record<string, string | undefined>>,
   ) => Result<SpeechProvider, AppError>;
+  readonly createTranslator?: (
+    env: Readonly<Record<string, string | undefined>>,
+  ) => Result<TranslationProvider, AppError>;
   readonly spawnCapture?: (input: {
     readonly syntheticFrames?: number;
   }) => Result<CaptureSource, AppError>;
@@ -59,6 +74,24 @@ function formatEvent(event: TranscriptEvent): string {
     case "progress":
       return `[progress] audio processed ${event.audioProcessedMs} ms`;
   }
+}
+
+function formatTranslationEvent(event: TranslationEvent): string {
+  switch (event.type) {
+    case "provisional":
+      return `[translation provisional] ${event.text}`;
+    case "committed":
+      return `[translation] ${event.text}`;
+    case "degraded":
+      return `[translation degraded: ${event.reason}] ${event.unitId}`;
+  }
+}
+
+function formatTranslationSummary(summary: TranslationSummary): string {
+  return (
+    `translation complete: committed=${summary.committed} provisionals=${summary.provisionals} ` +
+    `staleRejected=${summary.staleRejected} degraded=${summary.degraded} requests=${summary.requests}`
+  );
 }
 
 export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
@@ -87,10 +120,49 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
     if (input.file !== undefined && deps.openWav === undefined) {
       return err(appError("CONFIG_INVALID", "WAV transcription is not wired"));
     }
+    if (input.translate && deps.createTranslator === undefined) {
+      return err(
+        appError(
+          "CONFIG_INVALID",
+          "translation requires network egress authorization (--allow-egress)",
+        ),
+      );
+    }
     try {
       const provider = deps.createProvider(input.env);
       if (provider.isErr()) {
         return err(provider.error);
+      }
+      const translationController = new AbortController();
+      const stopTranslation = (): void => {
+        translationController.abort();
+      };
+      input.signal.addEventListener("abort", stopTranslation, { once: true });
+      let scheduler: TranslationScheduler | undefined;
+      if (input.translate) {
+        const created = (deps.createTranslator as NonNullable<TranscribeDeps["createTranslator"]>)(
+          input.env,
+        );
+        if (created.isErr()) {
+          input.signal.removeEventListener("abort", stopTranslation);
+          return err(created.error);
+        }
+        await input.output.errLine(
+          stripFormatting(
+            "disclosure: English transcripts will be sent to the selected cloud translation provider (OpenAI) for Indonesian translation. No transcripts are stored by urbuddy.",
+          ),
+        );
+        scheduler = new TranslationScheduler({
+          provider: created.value,
+          signal: translationController.signal,
+          onEvent: async (event) => {
+            if (input.json) {
+              await input.output.out(JSON.stringify(event));
+            } else {
+              await input.output.out(stripFormatting(formatTranslationEvent(event)));
+            }
+          },
+        });
       }
       let source: CaptureSource;
       if (input.file !== undefined) {
@@ -120,6 +192,7 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
         } else {
           await input.output.out(stripFormatting(formatEvent(event)));
         }
+        await scheduler?.consume(event);
       };
       const outcome = await runTranscription({
         source,
@@ -133,10 +206,33 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           : {}),
       });
       if (outcome.isErr()) {
+        stopTranslation();
+        input.signal.removeEventListener("abort", stopTranslation);
+        if (scheduler !== undefined) {
+          await scheduler.finish();
+        }
         return err(outcome.error);
       }
+      let translation: TranslationSummary | undefined;
+      if (scheduler !== undefined) {
+        translation = await scheduler.finish();
+        input.signal.removeEventListener("abort", stopTranslation);
+        if (input.json) {
+          await input.output.out(JSON.stringify({ type: "translation-complete", ...translation }));
+        } else {
+          await input.output.out(stripFormatting(formatTranslationSummary(translation)));
+        }
+      } else {
+        input.signal.removeEventListener("abort", stopTranslation);
+      }
       if (input.json) {
-        await input.output.out(JSON.stringify({ type: "complete", ...outcome.value }));
+        await input.output.out(
+          JSON.stringify({
+            type: "complete",
+            ...outcome.value,
+            ...(translation === undefined ? {} : { translation }),
+          }),
+        );
       } else {
         await input.output.out(
           stripFormatting(
@@ -144,7 +240,10 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           ),
         );
       }
-      return outcome;
+      return ok({
+        ...outcome.value,
+        ...(translation === undefined ? {} : { translation }),
+      });
     } catch (thrown: unknown) {
       return err(toAppError(thrown, "transcription failed"));
     }

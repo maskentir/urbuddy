@@ -1556,6 +1556,7 @@ describe("transcription continuity and cleanup", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: false,
+      translationLoopbackEndpoint: false,
       createProvider: () => {
         const session = new FakeSpeechSession(async function* () {});
         return ok({
@@ -1571,6 +1572,7 @@ describe("transcription continuity and cleanup", () => {
       mode: "endpointing",
       keywords: [],
       json: true,
+      translate: false,
       signal: new AbortController().signal,
       output: {
         out: (line: string) => {
@@ -1592,6 +1594,7 @@ describe("transcription continuity and cleanup", () => {
     const port = createTranscribePort({
       clock: { now: () => 0, isoNow: () => "" },
       loopbackEndpoint: true,
+      translationLoopbackEndpoint: true,
       createProvider: () => {
         const session = new FakeSpeechSession(async function* () {});
         return ok({
@@ -1610,6 +1613,7 @@ describe("transcription continuity and cleanup", () => {
       mode: "endpointing",
       keywords: [],
       json: false,
+      translate: false,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
       env: {},

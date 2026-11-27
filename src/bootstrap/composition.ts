@@ -8,6 +8,11 @@ import {
   isLoopbackEndpoint,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
 } from "@adapters/speech/muse";
+import {
+  createTranslationProviderFromEnv,
+  isLoopbackTranslationEndpoint,
+  TRANSLATE_ENDPOINT_ENV,
+} from "@adapters/translation/openai";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -137,9 +142,11 @@ function cliDepsFrom(
     transcribePort: createTranscribePort({
       clock: app.clock,
       loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
+      translationLoopbackEndpoint: isLoopbackTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV]),
       ...(isPermitted(app.policy, "network-egress")
         ? {
             createProvider: createMuseProviderFromEnv,
+            createTranslator: createTranslationProviderFromEnv,
             openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
           }
         : {}),
