@@ -256,6 +256,39 @@ describe("TranslationScheduler", () => {
     });
   });
 
+  it("counts an explicit provider failure when the evaluator aborts queued work", async () => {
+    const controller = new AbortController();
+    const failure = err(appError("INTERNAL", "translation request failed"));
+    const provider = fakeProvider(async () => {
+      controller.abort();
+      return failure;
+    });
+    const events: TranslationEvent[] = [];
+    const scheduler = new TranslationScheduler({
+      provider,
+      signal: controller.signal,
+      onEvent: async (event) => {
+        events.push(event);
+      },
+    });
+    scheduler.consume(final("current", 1, "Translate this."));
+    scheduler.consume(final("queued", 1, "Skip this."));
+
+    expect(await scheduler.finish()).toMatchObject({
+      finalized: 2,
+      requests: 1,
+      failedInvocations: 1,
+      cancelledInvocations: 0,
+      committed: 0,
+      uncovered: 2,
+      unresolvedInvocations: 0,
+    });
+    expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
+      "Translate this.",
+    ]);
+    expect(events).toEqual([]);
+  });
+
   it("does not let an older final supersede a newer source revision", async () => {
     const provider = fakeProvider();
     const scheduler = new TranslationScheduler({

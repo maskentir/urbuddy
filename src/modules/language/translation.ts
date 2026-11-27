@@ -500,7 +500,7 @@ export class TranslationScheduler {
     );
     if (result?.isOk()) {
       this.stats.responses += 1;
-    } else if ((result?.isErr() && result.error.code === "CANCELLED") || signal.aborted) {
+    } else if (result?.isErr() ? result.error.code === "CANCELLED" : signal.aborted) {
       this.stats.cancelledInvocations += 1;
     } else {
       this.stats.failedInvocations += 1;
