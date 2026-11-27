@@ -131,4 +131,4 @@ whether useful pauses occur before changing admission. Use final-only
 evidence for initial semantic qualification and withhold a live preview
 performance claim.
 
-See the [controlled comparison and snapshot experiment](./readiness.md) for the current offline readiness work.
+See the [controlled model selection results](./model-selection.md) for the blinded live comparison and [readiness evidence](./readiness.md) for the frozen inputs and offline snapshot experiment.

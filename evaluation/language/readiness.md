@@ -1,7 +1,8 @@
 # Semantic comparison and snapshot experiment
 
-PR #11 remains on hold. This work adds offline experiments and prepares a
-comparison. The production prompt and scheduler policy are unchanged.
+PR #11 remains on hold. The [controlled model selection report](./model-selection.md)
+records the completed comparison and its verdicts. The production prompt
+and scheduler policy are unchanged.
 
 ## Review of the original run
 
@@ -94,10 +95,10 @@ node tooling/evaluate-translation.mjs --compare gpt-6.1-terra --env-file .env.ex
 node tooling/evaluate-provisional.mjs --snapshot
 ```
 
-Run the following **only after fresh owner authorization covering both
-arms and the total budget**. Confirm the three checksums on the intended
-commit and the paths are unused. Abort the comparison on the first
-nonzero process status. Keep usage and raw synthetic evidence private.
+The completed run used the commands below. They record the execution
+procedure and the paths now occupied by its evidence. The authorization
+was consumed by that run. Any future run requires fresh authorization
+and unused evidence paths.
 
 ```sh
 (
@@ -149,6 +150,16 @@ not establish an append classifier for languages without word spaces.
 | 190 / 2,920 ms, short              |                     7 → 2 |                       0 → 1 |                     10 → 10 ms |
 | 190 / 2,920 ms, sustained          |                    13 → 3 |                       0 → 2 |                     10 → 10 ms |
 
+The paced evaluator reports `previewsPublishedBeforeFinal` and
+`firstPreviewPublicationMs`. Each experimental snapshot includes its
+age at publication and `visibleDurationMs`, measured until invalidation,
+expiry, or finalization in the simulated sink.
+
+| Sustained fixture | Age at publication | Visible duration per snapshot | Cancelled starts, current → snapshot |
+| ----------------- | -----------------: | ----------------------------: | -----------------------------------: |
+| 190 / 1,380 ms    |           1,400 ms |         120, 140, 140, 590 ms |                               13 → 0 |
+| 190 / 2,920 ms    |           2,940 ms |                   100, 120 ms |                               13 → 1 |
+
 The 1,380 and 2,920 ms delays round the recorded full-response median
 and p95 to the virtual clock's 10 ms step. In the sustained p95 fixture,
 snapshot revision 4 published at 3,700 ms with age 2,940 ms and raw
@@ -165,14 +176,13 @@ concurrency and asynchronous sink concurrency were one in each run.
 Committed work kept priority at the next free slot. A non-cooperative
 provider could hold that slot longer when a snapshot started near the final.
 
-The smallest production candidate is a bounded sampler in front of
-provisional admission, an explicit material-revision invalidation path
-and an age-labeled snapshot artifact. Reuse the current settlement,
-committed priority and publication guards. Before adoption, review
-what constitutes a material correction for each supported revision
-stream and set a final-latency budget. The experiment demonstrates
-more previews at measured delays and fewer starts, with fewer previews
-under the fast control and a longer final wait for non-cooperative work.
+The snapshot policy remains experimental. A textual prefix can remain
+intact through an appended negation, self-correction, or restrictive
+condition. A production change would need evidence that its revision
+contract handles those cases and a reviewed final-admission budget.
+The experiment demonstrates more publications at measured delays and
+fewer starts, with fewer publications under the fast control and a
+longer final wait for non-cooperative work.
 At the sustained p95 point the first snapshot was visible for 100 ms
 before correction. Publication alone does not establish reading value.
 The echo fixture cannot establish preview semantics. A quiet window

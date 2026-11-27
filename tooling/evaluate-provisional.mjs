@@ -82,7 +82,9 @@ for (const scenario of scenarios) {
     const sameOrWordAppend = (text, prefix) => text === prefix || text.startsWith(`${prefix} `);
     const hide = (reason) => {
       if (visible !== undefined) {
-        invalidations.push({ revision: visible.revision, time: Date.now(), reason });
+        const time = Date.now();
+        visible.visibleDurationMs = time - visible.time;
+        invalidations.push({ revision: visible.revision, time, reason });
         visible = undefined;
       }
     };
@@ -240,7 +242,10 @@ for (const scenario of scenarios) {
       assert.ok(partialCalls.length <= MAX_SNAPSHOTS);
       assert.ok(
         previews.every(
-          (preview) => preview.kind === "snapshot" && preview.ageMs <= SNAPSHOT_MAX_AGE_MS,
+          (preview) =>
+            preview.kind === "snapshot" &&
+            preview.ageMs <= SNAPSHOT_MAX_AGE_MS &&
+            preview.visibleDurationMs >= 0,
         ),
       );
       for (const correction of materialCorrections) {
@@ -290,9 +295,9 @@ for (const scenario of scenarios) {
         cancelledInvocations: summary.cancelledInvocations,
         staleRejected: summary.staleRejected,
         staleResponses: partialCalls.filter((call) => call.aborted && !call.cancelled).length,
-        usefulPreviews: previews.filter(({ time }) => time < finalAt).length,
+        previewsPublishedBeforeFinal: previews.filter(({ time }) => time < finalAt).length,
         previewRevisions: previews.map(({ revision }) => revision),
-        firstUsefulPreviewMs: previews.find(({ time }) => time < finalAt)?.time ?? null,
+        firstPreviewPublicationMs: previews.find(({ time }) => time < finalAt)?.time ?? null,
         committedAdmissionMs: committed?.queueMs ?? null,
         committedResponseMs: committed?.responseMs ?? null,
         committedCompletionMs: committed?.publicationMs ?? null,
