@@ -34,7 +34,8 @@ export interface TranscribeInput {
   readonly translationFlags?: TranslationFlags;
   readonly signal: AbortSignal;
   readonly output: CliOutput;
-  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly sttProvider?: string;
+  readonly sttModel?: string;
 }
 
 type BilingualSummary = TranscriptionSummary & {
@@ -47,13 +48,11 @@ export type TranscribePort = (
 
 export interface TranscribeDeps {
   readonly clock: Clock;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly loopbackEndpoint: boolean;
   readonly translationLoopbackEndpoint: boolean;
-  readonly createProvider?: (
-    env: Readonly<Record<string, string | undefined>>,
-  ) => Result<SpeechProvider, AppError>;
+  readonly createProvider?: (model?: string) => Result<SpeechProvider, AppError>;
   readonly createTranslator?: (
-    env: Readonly<Record<string, string | undefined>>,
     config: Extract<TranslationConfig, { enabled: true }>,
   ) => Result<TranslationProvider, AppError>;
   readonly spawnCapture?: (input: {
@@ -101,7 +100,12 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
     if (input.signal.aborted) {
       return err(appError("CANCELLED", "transcription cancelled"));
     }
-    const config = loadTranslationConfig(input.translate, input.translationFlags);
+    const env = deps.env ?? {};
+    const speechProvider = input.sttProvider ?? env["URBUDDY_STT_PROVIDER"] ?? "muse";
+    if (speechProvider !== "muse") {
+      return err(appError("CONFIG_INVALID", "unsupported speech provider"));
+    }
+    const config = loadTranslationConfig(input.translate, input.translationFlags, env);
     if (config.isErr()) {
       return err(config.error);
     }
@@ -165,7 +169,7 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
     }
     try {
       if (translationConfig.enabled) {
-        const created = deps.createTranslator?.(input.env, translationConfig);
+        const created = deps.createTranslator?.(translationConfig);
         if (created === undefined || created.isErr()) {
           return err(created?.error ?? appError("CONFIG_INVALID", "translation is not configured"));
         }
@@ -192,7 +196,7 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           },
         });
       }
-      const provider = createProvider(input.env);
+      const provider = createProvider(input.sttModel ?? env["URBUDDY_STT_MODEL"]);
       if (provider.isErr()) {
         return await fail(provider.error);
       }

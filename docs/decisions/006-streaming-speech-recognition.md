@@ -152,8 +152,12 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   a FIFO without a writer is rejected instead of hanging. Realtime
   pacing enforces a minimum half-chunk interval so catch-up bursts
   cannot exceed twice the source rate.
-- Credentials arrive only through the `MODEL_API_KEY` environment
-  variable, never through arguments, URLs, logs, or fixtures.
+- The Meta credential is resolved from `URBUDDY_META_API_KEY` in the
+  process environment or an explicitly selected application environment
+  file. Credentials stay out of arguments, URLs, logs, and committed fixtures.
+  The currently supported `URBUDDY_STT_MODEL` is `muse-voice-transcribe-1.0`.
+  The CLI may override it with `--stt-model`, and unsupported models
+  are rejected before source acquisition.
   Production connections are restricted to `wss://api.meta.ai`.
   The compiled CLI can address a loopback WebSocket server only
   through `URBUDDY_TRANSCRIBE_ENDPOINT`, which rejects everything

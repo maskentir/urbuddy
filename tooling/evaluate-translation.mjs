@@ -4,13 +4,18 @@ import { parseArgs } from "node:util";
 
 import { err, ok } from "neverthrow";
 
-import { createTranslationProviderFromEnv } from "../dist/adapters/translation/openai.js";
+import {
+  createTranslationProviderFromEnv,
+  TRANSLATE_API_KEY_ENV,
+} from "../dist/adapters/translation/openai.js";
 import { appError } from "../dist/kernel/errors.js";
+import { loadOperationEnvironment } from "../dist/modules/config/environment.js";
 import { loadTranslationConfig } from "../dist/modules/config/translation.js";
 import { TranslationScheduler } from "../dist/modules/language/translation.js";
 
 const { values: options } = parseArgs({
   options: {
+    "env-file": { type: "string" },
     live: { type: "boolean" },
     "allow-egress": { type: "boolean" },
   },
@@ -26,7 +31,11 @@ const corpus = JSON.parse(
   ),
 );
 const maximumInvocations = 16;
+const qualificationModel = "gpt-6-luna";
 const plannedInvocations = corpus.cases.reduce((total, item) => total + item.context.length + 1, 0);
+if (options.live && (corpus.version !== 3 || plannedInvocations !== maximumInvocations)) {
+  throw new Error("Live qualification requires the authorized v3 corpus");
+}
 if (plannedInvocations > maximumInvocations) {
   throw new Error("Corpus exceeds the evaluation invocation limit");
 }
@@ -40,6 +49,12 @@ async function emit(value, signal) {
   }
 }
 
+const environment = loadOperationEnvironment(process.env, options["env-file"]);
+if (environment.isErr()) {
+  console.error(environment.error.message);
+  process.exit(3);
+}
+const env = environment.value;
 const controller = new AbortController();
 const stop = () => controller.abort();
 process.once("SIGINT", stop);
@@ -47,22 +62,31 @@ process.once("SIGTERM", stop);
 let coverageFailed = false;
 try {
   const production = options.live
-    ? createTranslationProviderFromEnv({
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      })
+    ? createTranslationProviderFromEnv(
+        { [TRANSLATE_API_KEY_ENV]: env[TRANSLATE_API_KEY_ENV] },
+        qualificationModel,
+      )
     : undefined;
   if (production?.isErr()) {
-    throw new Error(production.error.message);
+    console.error(production.error.message);
+    process.exit(3);
   }
   let invocationCount = 0;
   for (const item of corpus.cases) {
     if (controller.signal.aborted) {
       break;
     }
-    const config = loadTranslationConfig(true, {
-      sourceLanguage: item.sourceLanguage,
-      targetLanguage: item.targetLanguage,
-    });
+    const config = loadTranslationConfig(
+      true,
+      {
+        sourceLanguage: item.sourceLanguage,
+        targetLanguage: item.targetLanguage,
+        ...(options.live
+          ? { translationProvider: "openai", translationModel: qualificationModel }
+          : {}),
+      },
+      env,
+    );
     if (config.isErr()) {
       throw new Error(config.error.message);
     }

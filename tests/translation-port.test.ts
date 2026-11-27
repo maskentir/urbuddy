@@ -129,7 +129,6 @@ describe("transcribe port with translation", () => {
           errLines.push(line);
         },
       },
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes("[final] Do not deploy it yet."))).toBe(true);
@@ -185,7 +184,6 @@ describe("transcribe port with translation", () => {
         translationFlags,
         signal: new AbortController().signal,
         output: { out: () => {}, errLine: () => {} },
-        env: {},
       });
       expect(outcome.isErr() && outcome.error.code).toBe("CONFIG_INVALID");
       expect(speechConstructed).toBe(false);
@@ -220,7 +218,6 @@ describe("transcribe port with translation", () => {
       translate: true,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
-      env: {},
     });
     expect(outcome.isErr() && outcome.error.code).toBe("CONFIG_INVALID");
     expect(providerCreations).toBe(0);
@@ -253,7 +250,6 @@ describe("transcribe port with translation", () => {
         },
         errLine: async () => {},
       },
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes("[translation"))).toBe(false);
@@ -278,7 +274,6 @@ describe("transcribe port with translation", () => {
       translate: true,
       signal: new AbortController().signal,
       output: { out: async () => {}, errLine: async () => {} },
-      env: {},
     });
     expect(outcome.isErr()).toBe(true);
     expect(opened).toBe(false);
@@ -306,7 +301,6 @@ describe("transcribe port with translation", () => {
       translate: true,
       signal: new AbortController().signal,
       output: { out: async () => {}, errLine: async () => {} },
-      env: {},
     });
     expect(outcome.isErr()).toBe(true);
     expect(opened).toBe(false);
@@ -340,7 +334,6 @@ describe("transcribe port with translation", () => {
         },
         errLine: async () => {},
       },
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes('"type":"degraded"'))).toBe(true);

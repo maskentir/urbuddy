@@ -1582,7 +1582,6 @@ describe("transcription continuity and cleanup", () => {
           errLines.push(line);
         },
       },
-      env: {},
     });
     expect(outcome.isOk()).toBe(true);
     expect(errLines.some((line) => line.includes("disclosure"))).toBe(true);
@@ -1616,7 +1615,6 @@ describe("transcription continuity and cleanup", () => {
       translate: false,
       signal: new AbortController().signal,
       output: { out: () => {}, errLine: () => {} },
-      env: {},
     });
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {

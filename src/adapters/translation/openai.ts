@@ -16,7 +16,7 @@ import { z } from "zod";
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 export const OPENAI_TRANSLATION_MODEL_ID = "gpt-6-luna";
 export const TRANSLATE_ENDPOINT_ENV = "URBUDDY_TRANSLATE_ENDPOINT";
-export const TRANSLATE_API_KEY_ENV = "OPENAI_API_KEY";
+export const TRANSLATE_API_KEY_ENV = "URBUDDY_OPENAI_API_KEY";
 const TRANSLATE_LOOPBACK_CREDENTIAL = "loopback-translate-credential";
 const REQUEST_TIMEOUT_MS = 8_000;
 const MODELS = new Set([OPENAI_TRANSLATION_MODEL_ID, "gpt-6.1-terra"]);
@@ -107,7 +107,10 @@ export function createTranslationProviderFromEnv(
   const apiKey = env[TRANSLATE_API_KEY_ENV]?.trim();
   if (!apiKey) {
     return err(
-      appError("CONFIG_INVALID", "translation credential is not configured (set OPENAI_API_KEY)"),
+      appError(
+        "CONFIG_INVALID",
+        "translation credential is not configured (set URBUDDY_OPENAI_API_KEY)",
+      ),
     );
   }
   return ok(createOpenAITranslationProvider({ apiKey, modelId }));

@@ -55,14 +55,21 @@ function canonicalLanguage(value: string): string | undefined {
 export function loadTranslationConfig(
   enabled: boolean,
   flags: TranslationFlags = {},
+  env: Readonly<Record<string, string | undefined>> = {},
 ): Result<TranslationConfig, AppError> {
   if (!enabled) {
     return Object.values(flags).some((value) => value !== undefined)
       ? err(appError("CONFIG_INVALID", "translation options require --translate"))
       : ok(Object.freeze({ enabled: false }));
   }
-  const source = flags.sourceLanguage ?? DEFAULT_TRANSLATION_LANGUAGES.sourceLanguage;
-  const target = flags.targetLanguage ?? DEFAULT_TRANSLATION_LANGUAGES.targetLanguage;
+  const source =
+    flags.sourceLanguage ??
+    env["URBUDDY_TRANSLATION_SOURCE_LANGUAGE"] ??
+    DEFAULT_TRANSLATION_LANGUAGES.sourceLanguage;
+  const target =
+    flags.targetLanguage ??
+    env["URBUDDY_TRANSLATION_TARGET_LANGUAGE"] ??
+    DEFAULT_TRANSLATION_LANGUAGES.targetLanguage;
   const sourceLanguage = source === "auto" ? source : canonicalLanguage(source);
   const targetLanguage = canonicalLanguage(target);
   if (!sourceLanguage || !targetLanguage || targetLanguage === "auto") {
@@ -70,11 +77,11 @@ export function loadTranslationConfig(
       appError("CONFIG_INVALID", "translation requires valid source and target language tags"),
     );
   }
-  const provider = flags.translationProvider ?? "openai";
+  const provider = flags.translationProvider ?? env["URBUDDY_TRANSLATION_PROVIDER"] ?? "openai";
   if (provider !== "openai") {
     return err(appError("CONFIG_INVALID", "unsupported translation provider"));
   }
-  const model = flags.translationModel ?? "gpt-6-luna";
+  const model = flags.translationModel ?? env["URBUDDY_TRANSLATION_MODEL"] ?? "gpt-6-luna";
   if (!/^[a-z\d][a-z\d.-]{0,79}$/.test(model)) {
     return err(appError("CONFIG_INVALID", "invalid translation model identifier"));
   }

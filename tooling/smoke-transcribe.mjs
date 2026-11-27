@@ -307,7 +307,14 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   }
   const result = await runCli(
     args,
-    childEnv({ args, env: { URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}` } }),
+    childEnv({
+      args,
+      env: {
+        URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}`,
+        URBUDDY_TRANSLATION_PROVIDER: "openai",
+        URBUDDY_OPENAI_API_KEY: "unused-translation-fixture",
+      },
+    }),
     120_000,
   );
   const stdoutPath = writeEvidence(`${name}.stdout.txt`, result.stdout);
@@ -315,6 +322,7 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   const assertions = [];
   check(assertions, "exit-code-0", result.code === 0, `code=${result.code}`);
   check(assertions, "no-timeout", !result.timedOut, "");
+  check(assertions, "translation-off-with-config", !result.stdout.includes("translation"), "");
   const conn = server.latest();
   check(
     assertions,
@@ -376,8 +384,24 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
 
 async function bilingualRun({ fixture, port, translatePort, translateStub, label }) {
   const name = `transcribe-${label}`;
+  const envFile = writeEvidence(
+    "bilingual-fixture.env",
+    [
+      "URBUDDY_STT_PROVIDER=muse",
+      "URBUDDY_STT_MODEL=muse-voice-transcribe-1.0",
+      "URBUDDY_TRANSLATION_SOURCE_LANGUAGE=en",
+      "URBUDDY_TRANSLATION_TARGET_LANGUAGE=ja",
+      "URBUDDY_TRANSLATION_MODEL=gpt-6.1-terra",
+      "URBUDDY_META_API_KEY=fixture-speech-only",
+      "URBUDDY_OPENAI_API_KEY=fixture-translation-only",
+    ].join("\n"),
+  );
   const args = [
+    "--env-file",
+    envFile,
     "transcribe",
+    "--target-language",
+    "id",
     "--file",
     fixture.path,
     "--allow-egress",
@@ -392,6 +416,8 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
       args,
       env: {
         URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}`,
+        URBUDDY_TRANSLATION_TARGET_LANGUAGE: "ko",
+        URBUDDY_TRANSLATION_MODEL: "gpt-6-luna",
         URBUDDY_TRANSLATE_ENDPOINT: `http://127.0.0.1:${translatePort}`,
       },
     }),
@@ -430,6 +456,8 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
     assertions,
     "translation-summary",
     translationComplete !== null &&
+      translationComplete.sourceLanguage === "en" &&
+      translationComplete.targetLanguage === "id" &&
       translationComplete.committed >= 1 &&
       translationComplete.failed === false,
     JSON.stringify(translationComplete),
@@ -453,7 +481,7 @@ async function bilingualRun({ fixture, port, translatePort, translateStub, label
       translateStub.requests.every(
         (r) => r.authorization === "Bearer loopback-translate-credential",
       ),
-    JSON.stringify(translateStub.requests.map((r) => r.authorization)),
+    "only the loopback sentinel is permitted",
   );
   check(
     assertions,
@@ -558,10 +586,18 @@ try {
       expectCode: 3,
       endpoint: "n/a",
     })) && allPass;
+  const deniedEnv = writeEvidence(
+    "deny-egress-fixture.env",
+    [
+      "URBUDDY_ALLOW_EGRESS=1",
+      "URBUDDY_META_API_KEY=fixture-speech-only",
+      "URBUDDY_OPENAI_API_KEY=fixture-translation-only",
+    ].join("\n"),
+  );
   allPass =
     (await denialRun({
       name: "deny-translate-no-egress",
-      args: ["transcribe", "--file", fixture.path, "--translate"],
+      args: ["--env-file", deniedEnv, "transcribe", "--file", fixture.path, "--translate"],
       extraEnv: {},
       expectCode: 3,
       endpoint: "n/a",

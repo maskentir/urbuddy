@@ -6,8 +6,9 @@ qualification are pending.
 ## Decision
 
 Translation is a separate, opt-in operation on immutable transcript revisions.
-The CLI resolves translation settings once from its operation flags and
-built-in defaults. The defaults are `auto` source interpretation, `id` target,
+The CLI resolves translation settings once. Explicit flags override the
+process environment, which overrides an explicitly selected environment
+file and then built-in defaults. The defaults are `auto` source interpretation, `id` target,
 `openai` provider, and `gpt-6-luna` model. Validated canonical locale tags
 express intent. Product support and model quality for each language remain
 qualification questions. Translation source settings leave Muse recognition
@@ -19,7 +20,8 @@ rejects unsupported providers and model identifiers, missing credentials,
 invalid endpoints and unauthorized egress before acquisition. A failed
 enablement rejects the operation. A translation failure during an admitted
 operation preserves transcription and produces translation degradation.
-The production endpoint is `https://api.openai.com/v1`. Test translation
+The production endpoint is `https://api.openai.com/v1`. OpenAI uses only
+`URBUDDY_OPENAI_API_KEY` from the process environment or selected file. Test translation
 accepts a numeric IPv4 loopback destination and uses a sentinel credential.
 Bilingual loopback requires paired loopback endpoints and the checked
 synthetic smoke WAV, whose PCM is snapshotted before egress. Native capture

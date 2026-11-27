@@ -287,7 +287,13 @@ describe("OpenAI translation adapter (local stub)", () => {
     expect(
       createTranslationProviderFromEnv({ [TRANSLATE_ENDPOINT_ENV]: "http://127.0.0.1:9" }).isOk(),
     ).toBe(true);
-    const missing = createTranslationProviderFromEnv({});
+    const missing = createTranslationProviderFromEnv({
+      URBUDDY_META_API_KEY: "wrong-provider-fixture",
+    });
+    expect(JSON.stringify(missing)).not.toContain("wrong-provider-fixture");
+    expect(
+      createTranslationProviderFromEnv({ [TRANSLATE_API_KEY_ENV]: "translation-fixture" }).isOk(),
+    ).toBe(true);
     expect(missing.isErr()).toBe(true);
     if (missing.isErr()) {
       expect(missing.error.code).toBe("CONFIG_INVALID");

@@ -6,3 +6,6 @@ native/audio-capture-macos/bin/
 evaluation/speech/corpus/
 evaluation/speech/results/
 evaluation/language/results/
+.env
+.env.*
+!.env.example

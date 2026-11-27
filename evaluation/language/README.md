@@ -49,14 +49,19 @@ The USD 0.05 proposal remains subject to authorization.
 Verify prices and enable owner-approved project spending controls before
 execution. [OpenAI model and rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
 
-With authorization and the dedicated credential already injected, run once:
+With authorization and the dedicated `URBUDDY_OPENAI_API_KEY` available
+locally, run once. The evaluator shares the CLI environment-file loader.
+Live mode fixes the authorized production recipient, Luna model and v3
+case languages even when the environment configures different defaults.
 
 ```sh
 pnpm build
 umask 077
 mkdir -p evaluation/language/results
-node tooling/evaluate-translation.mjs --live --allow-egress \
-  > evaluation/language/results/luna-synthetic-001.ndjson
+node tooling/evaluate-translation.mjs --env-file .env --live --allow-egress \
+  > evaluation/language/results/luna-synthetic-001.ndjson \
+  2> evaluation/language/results/luna-synthetic-001.stderr
+printf '%s\n' "$?" > evaluation/language/results/luna-synthetic-001.exit
 ```
 
 Record the exact commit, Node version, model, prompt and corpus versions,
