@@ -2,9 +2,10 @@ import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 
 import { createTranslationProviderFromEnv } from "../dist/adapters/translation/openai.js";
+import { appError } from "../dist/kernel/errors.js";
 import { loadTranslationConfig } from "../dist/modules/config/translation.js";
 import { TranslationScheduler } from "../dist/modules/language/translation.js";
 
@@ -77,22 +78,40 @@ try {
             return ok({ text });
           },
         };
+    const caseController = new AbortController();
+    const caseSignal = AbortSignal.any([controller.signal, caseController.signal]);
+    let stopReason;
+    const stopCase = (reason) => {
+      stopReason = reason;
+      caseController.abort();
+    };
     const scheduler = new TranslationScheduler({
       provider: {
         providerId: backend.providerId,
         modelId: backend.modelId,
-        translate: (request) => {
-          invocationCount += 1;
-          if (invocationCount > maximumInvocations) {
-            throw new Error("Evaluation invocation limit exhausted");
+        translate: async (request) => {
+          if (invocationCount >= maximumInvocations) {
+            stopCase("invocation budget exhausted");
+            return err(appError("CONFIG_INVALID", "evaluation invocation budget exhausted"));
           }
           if (Buffer.byteLength(JSON.stringify(request.messages)) > 4_096) {
-            throw new Error("Evaluation input exceeds the 4,096-byte message bound");
+            stopCase("input bound exceeded");
+            return err(appError("CONFIG_INVALID", "evaluation input bound exceeded"));
           }
-          return backend.translate(request);
+          invocationCount += 1;
+          try {
+            const result = await backend.translate(request);
+            if (result.isErr() && result.error.code !== "VALIDATION_FAILED") {
+              stopCase(`provider failure (${result.error.code})`);
+            }
+            return result;
+          } catch {
+            stopCase("provider invocation rejected");
+            return err(appError("INTERNAL", "evaluation provider invocation rejected"));
+          }
         },
       },
-      signal: controller.signal,
+      signal: caseSignal,
       languages: config.value,
       onEvent: async (event, isCurrent) => {
         if (!isCurrent()) {
@@ -114,11 +133,12 @@ try {
     const summary = await scheduler.finish();
     await emit({ type: "translation-complete", caseId: item.id, ...summary }, controller.signal);
     coverageFailed ||= summary.failed;
-    if (
-      summary.unresolvedInvocations ||
-      summary.unresolvedPublication ||
-      controller.signal.aborted
-    ) {
+    if (stopReason !== undefined) {
+      console.error(`qualification stopped at ${item.id}: ${stopReason}`);
+      break;
+    }
+    if (summary.unresolvedInvocations || summary.unresolvedPublication) {
+      console.error(`qualification stopped at ${item.id}: incomplete cleanup`);
       break;
     }
   }

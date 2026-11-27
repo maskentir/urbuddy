@@ -21,13 +21,15 @@ reference. Verify each actor, condition, exception, tense, modality,
 quantity and its role, unit, deadline and identifier. Report omissions and
 additions that change meaning as critical failures. Prompt-like speech and
 delimiter text must remain translated content. A fragment can stay
-grammatically incomplete. Speaker labels are approximate attribution.
+grammatically incomplete. Preserve recommendation strength, inclusive
+deadline boundaries, and the difference between a sufficient condition and
+an exclusive one. Speaker labels are approximate attribution.
 
 Japanese-to-Korean and Traditional Chinese-to-English cases exercise
 non-English sources, non-Indonesian targets and speech without whitespace
 between words. A separate language-model review checked these references against the
-source wording. Human bilingual sign-off is pending, so treat this subset
-as provisional. Live qualification
+source wording and supplies supporting evidence. The references remain
+provisional pending independent human bilingual sign-off. Live qualification
 requires zero critical semantic failures and complete finalized coverage
 on the reviewed corpus. Report noncritical fluency concerns separately.
 
@@ -71,3 +73,41 @@ translation and 2.5-second final contextual translation targets remain
 aspirational audio-to-output p95 goals. This transcript-only run excludes
 audio capture and recognition delay. Model invocation returns the full
 response, while provisional translation uses successive source revisions.
+
+## Offline provisional readiness
+
+On the unchanged production scheduler, run `node tooling/evaluate-provisional.mjs`
+after the build. The harness uses a virtual clock with 10 ms steps and a
+fixed-delay echo provider. It tracks whether a current revision actually
+reaches the sink before finalization. Echo content establishes publication
+timing and revision correctness. Semantic usefulness requires model output.
+
+The retained initial Muse qualification runs had 397 partials over 17 finals,
+411 over 18, and 123 over six. The 21-revision fixture reflects that density.
+The recorded events do not include per-revision arrival timestamps. The
+190 ms and 470 ms intervals and the 100 ms and 600 ms response delays are
+test assumptions. The fixture includes a same-length correction and a
+negation correction. The final arrives 90 ms after the last partial.
+
+| Revision interval (ms) | Response (ms) | Cancel behavior     | Preview starts | Cancelled | Stale rejections | Late responses | Current previews | First preview (ms) | Final admission (ms) | Final publication (ms) |
+| ---------------------: | ------------: | ------------------- | -------------: | --------: | ---------------: | -------------: | ---------------: | -----------------: | -------------------: | ---------------------: |
+|                    190 |           100 | Cooperative         |              7 |         1 |                1 |              0 |                6 |                500 |                   10 |                    110 |
+|                    190 |           600 | Cooperative         |              7 |         7 |                7 |              0 |                0 |                  — |                   10 |                    610 |
+|                    190 |           600 | Settles after abort |              6 |         0 |                6 |              6 |                0 |                  — |                  110 |                    710 |
+|                    470 |           600 | Cooperative         |             20 |        20 |               20 |              0 |                0 |                  — |                   10 |                    610 |
+
+Stale rejections include rejected cancelled revisions. Late responses count
+successful returns after the scheduler signaled abort. Final timings start
+at the synthetic final event. Every scenario committed its single final.
+All fixture calls settled, and there were zero unresolved invocations,
+unresolved publications, or publication failures.
+
+Sustained revisions starved previews at 600 ms response time. This is a
+provisional availability limitation. The exercised revision and final
+coverage checks passed. A narrow follow-up experiment would admit previews
+after a short revision-free window while keeping the publication guard and
+committed priority. That should reduce repeated starts during fast speech.
+A continuing utterance with no pause can still yield zero previews. Assess
+whether useful pauses occur before changing admission. Use final-only
+evidence for initial semantic qualification and withhold a live preview
+performance claim.

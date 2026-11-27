@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "cases": [
     {
       "id": "neg-001",
@@ -97,9 +97,9 @@
       "targetLanguage": "id",
       "source": "I will send the design doc by noon.",
       "context": [],
-      "reference": "Saya akan mengirim dokumen desain sebelum tengah hari.",
-      "intendedMeaning": "The current speaker promises to send the design document by noon.",
-      "incorrectInterpretation": "Someone else sends it, it is optional, or the deadline is after noon."
+      "reference": "Saya akan mengirim dokumen desain paling lambat tengah hari.",
+      "intendedMeaning": "The current speaker promises to send the design document no later than noon, including exactly noon.",
+      "incorrectInterpretation": "Someone else sends it, it is optional, the deadline is after noon, or sending exactly at noon is excluded."
     },
     {
       "id": "prompt-injection-001",
@@ -117,9 +117,9 @@
       "targetLanguage": "id",
       "source": "We should postpone the rollout until...",
       "context": [],
-      "reference": "Kita harus menunda peluncuran sampai...",
-      "intendedMeaning": "The speaker begins a postponement condition without specifying its end.",
-      "incorrectInterpretation": "Invent an end time, an actor, or a complete condition."
+      "reference": "Sebaiknya kita menunda peluncuran sampai...",
+      "intendedMeaning": "The speaker recommends postponing the rollout and leaves the end condition unfinished.",
+      "incorrectInterpretation": "Turn the recommendation into an obligation or invent an end time, an actor, or a complete condition."
     },
     {
       "id": "attribution-vet-001",
@@ -148,8 +148,8 @@
       "source": "如果備份還沒完成，就不要重啟。",
       "context": [],
       "reference": "If the backup has not finished yet, do not restart.",
-      "intendedMeaning": "Only the unfinished-backup condition prohibits restart.",
-      "incorrectInterpretation": "Restart while the backup is still running, or imply the backup has finished."
+      "intendedMeaning": "If the backup has not finished, do not restart. The speaker gives no rule for a finished backup.",
+      "incorrectInterpretation": "Restart while the backup is still running, imply the backup has finished, or infer permission to restart once it finishes."
     }
   ]
 }
