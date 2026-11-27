@@ -40,12 +40,10 @@ corpus. The one planned transcript run uses OpenAI GPT-6 Luna with
 the prior context utterance, and at most 1,024 completion tokens per
 invocation. It uses each case's source and target configuration. At
 current Standard pricing of USD 0.10 per million input tokens and USD 0.50
-per million output tokens, even the model's full context window per
-invocation would exceed the proposed cap. For this corpus the outgoing
-request is bounded instead by the authored source strings, the fixed
-prompt and an enforced 4,096-byte bound on serialized messages. A conservative estimate of 8,192 input
-tokens per invocation plus the hard output cap gives about USD 0.0095
-at Standard rates. The USD 0.05 proposal remains subject to authorization.
+per million output tokens, budgeting 8,192 input tokens for the enforced
+4,096-byte message bound plus API framing and the hard output cap gives
+`16 × (8192 × 0.10 + 1024 × 0.50) / 1,000,000 = USD 0.0213`.
+The USD 0.05 proposal remains subject to authorization.
 Verify prices and enable owner-approved project spending controls before
 execution. [OpenAI model and rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
 
