@@ -168,10 +168,32 @@ function handshakeMode(text) {
   }
 }
 
+const SMOKE_API_KEY = "smoke-test-key";
+const FORBIDDEN_FLAGS = ["--allow-child", "--persist", "--data-root"];
+
+function childEnv(extra) {
+  for (const flag of FORBIDDEN_FLAGS) {
+    if (extra.args !== undefined && extra.args.includes(flag)) {
+      throw new Error(`loopback smoke must not request ${flag}`);
+    }
+  }
+  return {
+    ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+    MODEL_API_KEY: SMOKE_API_KEY,
+    ...extra.env,
+  };
+}
+
+let activeChild = null;
+
 function runCli(args, env, timeoutMs) {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn("node", [cli, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [cli, ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    activeChild = child;
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -190,6 +212,7 @@ function runCli(args, env, timeoutMs) {
     timer.unref?.();
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      activeChild = null;
       resolve({
         code: code ?? "null",
         signal: signal ?? null,
@@ -226,11 +249,7 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   }
   const result = await runCli(
     args,
-    {
-      ...process.env,
-      MODEL_API_KEY: "smoke-test-key",
-      URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}`,
-    },
+    childEnv({ args, env: { URBUDDY_TRANSCRIBE_ENDPOINT: `ws://127.0.0.1:${port}` } }),
     120_000,
   );
   const stdoutPath = writeEvidence(`${name}.stdout.txt`, result.stdout);
@@ -245,19 +264,20 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
     server.connectionCount() === connIndex + 1,
     `connections=${server.connectionCount()} want=${connIndex + 1}`,
   );
+  check(assertions, "connection-established", conn !== undefined, "");
   check(
     assertions,
     "audio-bytes-exact",
-    conn.audioBytes === fixture.expectedPcmBytes,
-    `got=${conn.audioBytes} want=${fixture.expectedPcmBytes}`,
+    conn !== undefined && conn.audioBytes === fixture.expectedPcmBytes,
+    `got=${conn === undefined ? "none" : conn.audioBytes} want=${fixture.expectedPcmBytes}`,
   );
   check(
     assertions,
     "audio-after-ack",
-    conn.firstAudioAt >= conn.ackAt && conn.firstAudioAt > 0,
+    conn !== undefined && conn.firstAudioAt >= conn.ackAt && conn.firstAudioAt > 0,
     "",
   );
-  check(assertions, "endStream-observed", conn.endStreamSeen === true, "");
+  check(assertions, "endStream-observed", conn !== undefined && conn.endStreamSeen === true, "");
   if (json) {
     let complete = null;
     let parseOk = true;
@@ -286,7 +306,7 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   manifest.runs.push({
     name,
     args,
-    env: { endpoint: "loopback", credential: "dummy" },
+    env: { endpoint: "loopback", credential: "dummy", isolation: "allowlist" },
     exitCode: result.code,
     durationMs: result.durationMs,
     stdoutPath,
@@ -296,8 +316,8 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   return assertions.every((a) => a.pass);
 }
 
-async function denialRun({ name, args, env, expectCode, endpoint }) {
-  const result = await runCli(args, env, 30_000);
+async function denialRun({ name, args, extraEnv, expectCode, endpoint }) {
+  const result = await runCli(args, childEnv({ args, env: extraEnv }), 30_000);
   const stdoutPath = writeEvidence(`${name}.stdout.txt`, result.stdout);
   const stderrPath = writeEvidence(`${name}.stderr.txt`, result.stderr);
   const assertions = [];
@@ -313,7 +333,8 @@ async function denialRun({ name, args, env, expectCode, endpoint }) {
     args,
     env: {
       endpoint: endpoint ?? "default",
-      credential: env.MODEL_API_KEY === undefined ? "absent" : "dummy",
+      credential: "dummy-allowlisted",
+      isolation: "allowlist",
     },
     exitCode: result.code,
     durationMs: result.durationMs,
@@ -326,68 +347,84 @@ async function denialRun({ name, args, env, expectCode, endpoint }) {
 
 const fixture = makeWavFixture();
 const server = startServer();
-await server.listening;
-const address = server.wss.address();
-const port = typeof address === "object" && address !== null ? address.port : 0;
-
 let allPass = true;
-allPass =
-  (await positiveRun({
-    mode: "endpointing",
-    json: true,
-    fixture,
-    server,
-    port,
-    label: "endpointing-json",
-  })) && allPass;
-allPass =
-  (await positiveRun({
-    mode: "diarization",
-    json: false,
-    fixture,
-    server,
-    port,
-    label: "diarization-text",
-  })) && allPass;
+try {
+  await server.listening;
+  const address = server.wss.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
 
-const baseEnv = { ...process.env, MODEL_API_KEY: "smoke-test-key" };
-allPass =
-  (await denialRun({
-    name: "deny-no-egress",
-    args: ["transcribe", "--file", fixture.path],
-    env: baseEnv,
-    expectCode: 3,
-    endpoint: "n/a",
-  })) && allPass;
-allPass =
-  (await denialRun({
-    name: "deny-evil-endpoint",
-    args: ["transcribe", "--file", fixture.path, "--allow-egress"],
-    env: { ...baseEnv, URBUDDY_TRANSCRIBE_ENDPOINT: "ws://evil.example.com/x" },
-    expectCode: 2,
-    endpoint: "remote-plaintext-rejected",
-  })) && allPass;
-allPass =
-  (await denialRun({
-    name: "deny-malformed-endpoint",
-    args: ["transcribe", "--file", fixture.path, "--allow-egress"],
-    env: { ...baseEnv, URBUDDY_TRANSCRIBE_ENDPOINT: "::not-a-url::" },
-    expectCode: 2,
-    endpoint: "malformed-rejected",
-  })) && allPass;
+  allPass =
+    (await positiveRun({
+      mode: "endpointing",
+      json: true,
+      fixture,
+      server,
+      port,
+      label: "endpointing-json",
+    })) && allPass;
+  allPass =
+    (await positiveRun({
+      mode: "diarization",
+      json: false,
+      fixture,
+      server,
+      port,
+      label: "diarization-text",
+    })) && allPass;
 
-writeEvidence("server-events.jsonl", server.events.map((e) => JSON.stringify(e)).join("\n") + "\n");
-manifest.serverEvents = server.events.length;
-manifest.serverConnections = server.connectionCount();
-manifest.fixture = {
-  frames: 48000,
-  expectedPcmBytes: fixture.expectedPcmBytes,
-  sha256: fixture.sha256,
-};
-manifest.finishedAt = new Date().toISOString();
-manifest.pass = allPass;
-writeEvidence("manifest.json", JSON.stringify(manifest, null, 2));
-await new Promise((done) => server.wss.close(() => done()));
+  allPass =
+    (await denialRun({
+      name: "deny-no-egress",
+      args: ["transcribe", "--file", fixture.path],
+      extraEnv: {},
+      expectCode: 3,
+      endpoint: "n/a",
+    })) && allPass;
+  allPass =
+    (await denialRun({
+      name: "deny-evil-endpoint",
+      args: ["transcribe", "--file", fixture.path, "--allow-egress"],
+      extraEnv: { URBUDDY_TRANSCRIBE_ENDPOINT: "ws://evil.example.com/x" },
+      expectCode: 2,
+      endpoint: "remote-plaintext-rejected",
+    })) && allPass;
+  allPass =
+    (await denialRun({
+      name: "deny-malformed-endpoint",
+      args: ["transcribe", "--file", fixture.path, "--allow-egress"],
+      extraEnv: { URBUDDY_TRANSCRIBE_ENDPOINT: "::not-a-url::" },
+      expectCode: 2,
+      endpoint: "malformed-rejected",
+    })) && allPass;
+} catch (thrown) {
+  allPass = false;
+  manifest.harnessError =
+    thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown);
+} finally {
+  if (activeChild !== null) {
+    try {
+      activeChild.kill("SIGKILL");
+    } catch {
+      activeChild = null;
+    }
+    activeChild = null;
+  }
+  writeEvidence(
+    "server-events.jsonl",
+    server.events.map((e) => JSON.stringify(e)).join("\n") + "\n",
+  );
+  manifest.serverEvents = server.events.length;
+  manifest.serverConnections = server.connectionCount();
+  manifest.fixture = {
+    frames: 48000,
+    expectedPcmBytes: fixture.expectedPcmBytes,
+    sha256: fixture.sha256,
+  };
+  manifest.finishedAt = new Date().toISOString();
+  manifest.pass = allPass;
+  writeEvidence("manifest.json", JSON.stringify(manifest, null, 2));
+  await new Promise((done) => server.wss.close(() => done()));
+}
 
 console.log(`smoke-transcribe: ${allPass ? "PASS" : "FAIL"} evidence=${evidenceDir}`);
 if (!allPass) {
@@ -397,6 +434,9 @@ if (!allPass) {
         console.log(`  FAIL ${run.name}/${assertion.name} ${assertion.detail}`);
       }
     }
+  }
+  if (manifest.harnessError !== undefined) {
+    console.log(`  FAIL harness/${manifest.harnessError}`);
   }
   process.exit(1);
 }
