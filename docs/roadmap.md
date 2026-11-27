@@ -71,14 +71,18 @@ PR:
    [PR #8](https://github.com/maskentir/urbuddy/pull/8).
 2. Streaming speech recognition: real-time English transcription
    within the latency and loss budgets defined in
-   [architecture](./architecture.md). Implemented against a local
-   protocol server; live provider acceptance remains pending
-   owner-authorized execution.
+   [architecture](./architecture.md). Met by
+   [PR #10](https://github.com/maskentir/urbuddy/pull/10), including
+   owner-authorized live qualification (3/3 runs exit 0, zero reported
+   discontinuities). Retained limitations: rotation, long-session
+   endurance, production latency distribution, accuracy benchmarks.
 
-## 4. Live Language Engine — planned
+## 4. Live Language Engine — next
 
 Product outcome: reliable English–Indonesian translation that stays
-readable while speech is still in flight.
+readable while speech is still in flight. Implementation in progress
+(`feat/live-language-engine`); live model qualification not yet
+authorized.
 
 Dependencies: Speech Perception, Core Runtime.
 

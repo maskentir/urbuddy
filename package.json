@@ -30,6 +30,8 @@
     "prebuild": "rm -rf dist"
   },
   "dependencies": {
+    "@langchain/core": "1.5.1",
+    "@langchain/openai": "1.8.5",
     "better-sqlite3": "13.2.0",
     "commander": "15.1.0",
     "drizzle-orm": "0.45.4",

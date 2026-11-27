@@ -121,8 +121,10 @@ MODEL_API_KEY=<key> pnpm exec tsx src/bootstrap/main.ts transcribe --file <wav> 
 | `src/modules/security`       | Default-deny security policy                             | [security](./src/modules/security)            |
 | `src/modules/session`        | Session runtime: ordering, revisions, gaps               | [session](./src/modules/session)              |
 | `src/modules/perception`     | Audio contracts and capture orchestration                | [perception](./src/modules/perception)        |
+| `src/modules/language`       | Translation units, scheduling, glossary                  | —                                             |
 | `src/adapters/audio`         | Native helper supervision and frame decoding             | [audio](./src/adapters/audio)                 |
 | `src/adapters/speech`        | Muse streaming speech provider (WebSocket)               | [speech](./src/adapters/speech)               |
+| `src/adapters/translation`   | OpenAI translation provider (LangChain)                  | —                                             |
 | `native/audio-capture-macos` | Swift Core Audio Tap helper (macOS, `pnpm native:build`) | [audio-capture](./native/audio-capture-macos) |
 | `src/platform`               | Infrastructure, logging, paths, and output               | [platform](./src/platform)                    |
 | `src/presentation`           | Commander CLI and Ink terminal                           | [presentation](./src/presentation)            |
@@ -157,6 +159,8 @@ permission the ceiling denies. Forbidden grants fail fast.
 | `URBUDDY_ALLOW_CHILD`         | `--allow-child`                                                                                          |
 | `URBUDDY_AUDIO_HELPER`        | (no flag; absolute path override for the native helper binary)                                           |
 | `URBUDDY_TRANSCRIBE_ENDPOINT` | (no flag; loopback-only WebSocket URL for local smoke/test servers; production uses `wss://api.meta.ai`) |
+| `OPENAI_API_KEY`              | (no flag; translation credential for `--translate`; never reused from `MODEL_API_KEY`)                   |
+| `URBUDDY_TRANSLATE_ENDPOINT`  | (no flag; loopback-only HTTP URL for local smoke/test servers; production uses `https://api.openai.com`) |
 
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit
