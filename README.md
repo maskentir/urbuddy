@@ -16,11 +16,11 @@ Working conventions live in [AGENTS.md](./AGENTS.md).
 Application Foundation and Core Runtime are merged. Speech Perception
 completed its initial implementation gate, including an owner-authorized
 Muse run series. Production latency, rotation, endurance, and recognition
-accuracy remain open. Live Language Engine is in progress. The proposed
-experimental slice translates finalized utterances. Neither Luna nor
-Terra met the frozen semantic criteria. Human bilingual review,
-sustained committed throughput, end-to-end latency, and useful
-provisional translation remain open.
+accuracy remain open. The Live Language Engine experimental implementation
+was accepted for opt-in translation of finalized utterances and awaits
+final merge review. Neither Luna nor Terra met the frozen semantic
+criteria. Human bilingual review, sustained committed throughput,
+end-to-end latency, and useful provisional translation remain open.
 See the [roadmap](./docs/roadmap.md) and [translation evaluation guide](./evaluation/language/README.md).
 
 ## The problem

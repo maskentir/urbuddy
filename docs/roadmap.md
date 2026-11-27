@@ -81,24 +81,27 @@ PR:
 
 Product outcome: contextual translation between configured languages that
 stays readable while speech is still in flight. Automatic source interpretation
-and Indonesian output are the initial personalized defaults. Implementation
-is in progress. Authorized transcript-only runs completed, and neither
-comparison model met the frozen semantic gate.
+and Indonesian output are the initial personalized defaults. The owner
+accepted the initial experimental implementation. Neither comparison
+model met the frozen semantic gate.
 
 Dependencies: Speech Perception, Core Runtime.
 
 Scope: contextual translation, semantic units, provisional and
 committed outputs, revision control, glossary handling.
 
-**Proposed delivery scope, pending owner approval.** Ship the initial
-implementation as opt-in experimental translation of finalized source
-utterances, using the evaluated v3 prompt with Terra as the configurable
-default. Continue displaying original partial transcripts. Defer useful
-provisional translation to a separately reviewed slice. This proposal
-defines an implementation deliverable. The existing semantic acceptance
-gate and real-time product outcome still apply. Bilingual adjudication,
-end-to-end latency and sustained committed throughput remain open.
-[Model selection and evidence](../evaluation/language/model-selection.md)
+**Approved experimental implementation scope.** Provide opt-in contextual
+translation of finalized source utterances using the evaluated v3 prompt
+and Terra as the configurable model default. Continue displaying
+original partial transcripts. Provisional translation and snapshot
+policies remain experimental.
+
+The owner approved an exception to allow merging the experimental
+implementation before qualification, subject to final review of PR #11.
+The semantic acceptance gate and real-time product outcome still apply.
+Human bilingual adjudication, sustained committed throughput, end-to-end
+latency, and useful provisional translation remain outstanding release
+requirements. [Model selection and evidence](../evaluation/language/model-selection.md)
 
 Non-goals: general-purpose chat, summarization.
 

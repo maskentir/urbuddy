@@ -1,9 +1,22 @@
 # ADR-007 · Live Language Engine translation slice
 
-Status: implementation review. Live model and multilingual semantic
-qualification are pending.
+Status: owner accepted the experimental implementation at
+`5ad0f304d01ab7c4db144d8b3e46b4269d3f191c`. PR #11 awaits final merge
+review. Semantic and production qualification remain open.
 
 ## Decision
+
+The approved implementation scope is opt-in contextual translation of
+finalized utterances using the evaluated v3 prompt and Terra as the
+configurable model default. Original partial transcripts remain visible.
+Provisional translation and snapshot policies remain experimental.
+
+The owner approved merging the experimental implementation despite the
+unmet semantic gate, subject to final review of PR #11. The historical
+and controlled comparison verdicts remain in force. Human bilingual
+adjudication, sustained committed throughput, end-to-end latency, and
+useful provisional translation remain required for qualification.
+[Frozen scores and evidence](../../evaluation/language/model-selection.md)
 
 Translation is a separate, opt-in operation on immutable transcript revisions.
 The CLI resolves translation settings once. Explicit flags override the
