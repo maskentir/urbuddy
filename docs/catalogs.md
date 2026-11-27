@@ -27,7 +27,9 @@ no network egress or audio persistence. `transcribe` streams audio
 (native capture or a paced local WAV) to the Muse provider through
 the perception speech operation; it requires egress authorization,
 plus child-process authorization for live capture, and keeps audio
-and transcripts ephemeral.
+and transcripts ephemeral. Explicit `--translate` routes transcript text
+and bounded context to the independently selected translation provider.
+The bilingual event and outcome contracts are recorded in [ADR-007](./decisions/007-live-language-engine.md).
 
 ## Exit codes (`src/kernel/exit-codes.ts`)
 

@@ -1,5 +1,8 @@
+import "@langchain/core/context";
+
 import { appError, type AppError } from "@kernel/errors";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { AsyncLocalStorageProviderSingleton } from "@langchain/core/singletons";
 import { ChatOpenAI } from "@langchain/openai";
 import type {
   TranslationProvider,
@@ -11,70 +14,62 @@ import { err, ok, type Result } from "neverthrow";
 import { z } from "zod";
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
-
 export const OPENAI_TRANSLATION_MODEL_ID = "gpt-6-luna";
 export const TRANSLATE_ENDPOINT_ENV = "URBUDDY_TRANSLATE_ENDPOINT";
 export const TRANSLATE_API_KEY_ENV = "OPENAI_API_KEY";
 const TRANSLATE_LOOPBACK_CREDENTIAL = "loopback-translate-credential";
+const REQUEST_TIMEOUT_MS = 8_000;
+const MODELS = new Set([OPENAI_TRANSLATION_MODEL_ID, "gpt-6.1-terra"]);
 
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_TRANSLATION_CHARS = 4_000;
-
-const translationSchema = z.object({
-  translation: z.string().min(1).max(MAX_TRANSLATION_CHARS),
+const translationSchema = z.strictObject({
+  translation: z.string().trim().min(1).max(4_000),
+});
+const completionSchema = z.object({
+  choices: z.tuple([
+    z.object({
+      finish_reason: z.literal("stop"),
+      message: z.object({
+        role: z.literal("assistant"),
+        refusal: z.null().optional(),
+        content: z.string().max(24_000),
+        tool_calls: z.tuple([]).optional(),
+        function_call: z.null().optional(),
+      }),
+    }),
+  ]),
+});
+const usageSchema = z.object({
+  prompt_tokens: z.number().int().nonnegative(),
+  completion_tokens: z.number().int().nonnegative(),
 });
 
-const translationJsonSchema = {
-  name: "translation",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: { translation: { type: "string" } },
-    required: ["translation"],
-    additionalProperties: false,
-  },
-} as const;
-
-function validateEndpoint(raw: string): Result<URL, AppError> {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return err(appError("VALIDATION_FAILED", "translation endpoint is invalid"));
-  }
-  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
-  if (url.protocol === "https:" && url.host === "api.openai.com") {
-    return ok(url);
-  }
-  if (loopback && (url.protocol === "http:" || url.protocol === "https:")) {
-    return ok(url);
-  }
-  return err(
-    appError("VALIDATION_FAILED", "translation endpoint is not an authorized destination"),
-  );
-}
-
 export function resolveTranslationEndpoint(raw: string | undefined): Result<string, AppError> {
-  if (raw === undefined || raw.trim() === "") {
+  if (raw === undefined || raw.trim() === "" || raw.trim() === OPENAI_API_BASE_URL) {
     return ok(OPENAI_API_BASE_URL);
   }
-  const validated = validateEndpoint(raw.trim());
-  if (validated.isErr()) {
-    return err(validated.error);
+  try {
+    const url = new URL(raw);
+    if (
+      url.hostname === "127.0.0.1" &&
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.port !== "" &&
+      (url.pathname === "/" || url.pathname === "/v1") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    ) {
+      return ok(url.toString().replace(/\/$/, ""));
+    }
+  } catch {
+    return err(appError("CONFIG_INVALID", "translation endpoint is invalid"));
   }
-  return ok(validated.value.toString().replace(/\/$/, ""));
+  return err(appError("CONFIG_INVALID", "translation endpoint is not an authorized destination"));
 }
 
 export function isLoopbackTranslationEndpoint(raw: string | undefined): boolean {
   const resolved = resolveTranslationEndpoint(raw);
-  if (resolved.isErr()) {
-    return false;
-  }
-  try {
-    return new URL(resolved.value).hostname !== "api.openai.com";
-  } catch {
-    return false;
-  }
+  return resolved.isOk() && resolved.value !== OPENAI_API_BASE_URL;
 }
 
 export interface OpenAITranslationOptions {
@@ -86,50 +81,79 @@ export interface OpenAITranslationOptions {
 
 export function createTranslationProviderFromEnv(
   env: Readonly<Record<string, string | undefined>>,
+  modelId = OPENAI_TRANSLATION_MODEL_ID,
 ): Result<TranslationProvider, AppError> {
   const endpoint = resolveTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV]);
   if (endpoint.isErr()) {
     return err(endpoint.error);
   }
-  if (isLoopbackTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV])) {
+  if (!MODELS.has(modelId)) {
+    return err(appError("CONFIG_INVALID", "unsupported OpenAI translation model"));
+  }
+  if (process.env["LANGCHAIN_TRACING"]) {
+    return err(
+      appError("CONFIG_INVALID", "legacy LangChain tracing must be unset for translation"),
+    );
+  }
+  if (endpoint.value !== OPENAI_API_BASE_URL) {
     return ok(
       createOpenAITranslationProvider({
         apiKey: TRANSLATE_LOOPBACK_CREDENTIAL,
         testEndpoint: endpoint.value,
+        modelId,
       }),
     );
   }
-  const apiKey = env[TRANSLATE_API_KEY_ENV];
-  if (apiKey === undefined || apiKey.trim().length === 0) {
+  const apiKey = env[TRANSLATE_API_KEY_ENV]?.trim();
+  if (!apiKey) {
     return err(
       appError("CONFIG_INVALID", "translation credential is not configured (set OPENAI_API_KEY)"),
     );
   }
-  return ok(createOpenAITranslationProvider({ apiKey }));
+  return ok(createOpenAITranslationProvider({ apiKey, modelId }));
 }
 
 export function createOpenAITranslationProvider(
   options: OpenAITranslationOptions,
 ): TranslationProvider {
-  if (options.apiKey.trim().length === 0) {
-    throw appError("CONFIG_INVALID", "translation credential must not be empty");
+  const endpoint = resolveTranslationEndpoint(options.testEndpoint);
+  if (endpoint.isErr()) {
+    throw endpoint.error;
   }
-  if (options.testEndpoint !== undefined && validateEndpoint(options.testEndpoint).isErr()) {
-    throw appError("VALIDATION_FAILED", "translation endpoint is not an authorized destination");
+  const loopback = endpoint.value !== OPENAI_API_BASE_URL;
+  if (options.testEndpoint !== undefined && !loopback) {
+    throw appError("CONFIG_INVALID", "translation test endpoint must be loopback");
   }
+  const apiKey = loopback ? TRANSLATE_LOOPBACK_CREDENTIAL : options.apiKey.trim();
   const modelId = options.modelId ?? OPENAI_TRANSLATION_MODEL_ID;
+  if (!apiKey || !MODELS.has(modelId)) {
+    throw appError("CONFIG_INVALID", "invalid OpenAI translation credential or model");
+  }
+  const timeout = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const destination = `${endpoint.value}/chat/completions`;
   const model = new ChatOpenAI({
-    apiKey: options.apiKey,
+    apiKey,
     model: modelId,
-    temperature: 0,
-    timeout: options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+    timeout,
     maxTokens: 1_024,
     maxRetries: 0,
-    modelKwargs: {
-      response_format: { type: "json_schema", json_schema: translationJsonSchema },
-    },
+    useResponsesApi: false,
+    streaming: false,
+    verbose: false,
+    __includeRawResponse: true,
+    reasoning: { effort: "none" },
+    modelKwargs: { response_format: { type: "json_object" } },
     configuration: {
-      baseURL: options.testEndpoint ?? OPENAI_API_BASE_URL,
+      baseURL: endpoint.value,
+      organization: null,
+      project: null,
+      logLevel: "off",
+      fetch: (url, init) => {
+        if (String(url) !== destination) {
+          throw appError("CONFIG_INVALID", "unexpected translation request destination");
+        }
+        return fetch(url, { ...init, redirect: "error" });
+      },
     },
   });
   return {
@@ -137,33 +161,62 @@ export function createOpenAITranslationProvider(
     modelId,
     translate: async (
       request: TranslationRequest,
-    ): Promise<Result<TranslationResult, AppError>> => {
+    ): Promise<Result<TranslationResult, AppError & { readonly usage?: TranslationUsage }>> => {
       if (request.signal.aborted) {
         return err(appError("CANCELLED", "translation cancelled"));
       }
-      try {
-        const message = await model.invoke(
-          request.messages.map((entry) =>
-            entry.role === "system"
-              ? new SystemMessage(entry.content)
-              : new HumanMessage(entry.content),
-          ),
-          { signal: request.signal, timeout: options.timeoutMs ?? REQUEST_TIMEOUT_MS },
+      if (process.env["LANGCHAIN_TRACING"]) {
+        return err(
+          appError("CONFIG_INVALID", "legacy LangChain tracing must be unset for translation"),
         );
-        if (typeof message.content !== "string") {
-          return err(appError("VALIDATION_FAILED", "translation response failed validation"));
+      }
+      try {
+        const message = await AsyncLocalStorageProviderSingleton.getInstance().run(
+          { tracingEnabled: false },
+          () =>
+            model.invoke(
+              request.messages.map((entry) =>
+                entry.role === "system"
+                  ? new SystemMessage(entry.content)
+                  : new HumanMessage(entry.content),
+              ),
+              { signal: request.signal, timeout, callbacks: [] },
+            ),
+        );
+        const raw: unknown = message.additional_kwargs["__raw_response"];
+        const envelope = z.object({ usage: usageSchema.optional() }).safeParse(raw);
+        const tokens = envelope.success ? envelope.data.usage : undefined;
+        const usage =
+          tokens === undefined
+            ? undefined
+            : {
+                inputTokens: tokens.prompt_tokens,
+                outputTokens: tokens.completion_tokens,
+              };
+        const validationFailure = (): Result<
+          never,
+          AppError & { readonly usage?: TranslationUsage }
+        > =>
+          err(
+            Object.assign(
+              appError("VALIDATION_FAILED", "translation completion failed validation"),
+              usage === undefined ? {} : { usage },
+            ),
+          );
+        const completion = completionSchema.safeParse(raw);
+        if (!completion.success) {
+          return validationFailure();
         }
         let parsed: unknown;
         try {
-          parsed = JSON.parse(message.content) as unknown;
+          parsed = JSON.parse(completion.data.choices[0].message.content);
         } catch {
-          return err(appError("VALIDATION_FAILED", "translation response failed validation"));
+          return validationFailure();
         }
         const validated = translationSchema.safeParse(parsed);
         if (!validated.success) {
-          return err(appError("VALIDATION_FAILED", "translation response failed validation"));
+          return validationFailure();
         }
-        const usage = extractUsage(message);
         return ok({
           text: validated.data.translation,
           ...(usage === undefined ? {} : { usage }),
@@ -179,19 +232,4 @@ export function createOpenAITranslationProvider(
       }
     },
   };
-}
-
-function extractUsage(raw: unknown): TranslationUsage | undefined {
-  if (typeof raw !== "object" || raw === null) {
-    return undefined;
-  }
-  const metadata = (raw as { readonly usage_metadata?: unknown }).usage_metadata;
-  if (typeof metadata !== "object" || metadata === null) {
-    return undefined;
-  }
-  const tokens = metadata as { readonly input_tokens?: unknown; readonly output_tokens?: unknown };
-  if (typeof tokens.input_tokens !== "number" || typeof tokens.output_tokens !== "number") {
-    return undefined;
-  }
-  return { inputTokens: tokens.input_tokens, outputTokens: tokens.output_tokens };
 }

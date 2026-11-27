@@ -1,66 +1,109 @@
-# ADR-007: Live Language Engine translation slice
+# ADR-007 · Live Language Engine translation slice
 
-Status: accepted (implementation in `feat/live-language-engine`).
-
-## Context
-
-Speech Perception delivers English transcript events with revision
-semantics. The Live Language Engine must turn them into readable
-Indonesian while speech is still in flight, without stalling
-recognition, duplicating provider work, or silently authorizing a new
-cloud destination.
+Status: implementation review. Live model and multilingual semantic
+qualification are pending.
 
 ## Decision
 
-- Model gateway: LangChain.js (`@langchain/core@1.5.1`,
-  `@langchain/openai@1.8.5`, both MIT, Node >=20/>=22), consumed only
-  through a thin OpenAI chat-completions adapter.
-- Model: `gpt-6-luna` (verified 2026-11-27 against official OpenAI docs:
-  callable ID, Chat Completions + structured-output support, $0.10/$0.50
-  per 1M input/output tokens). One configured model, no registry or
-  fallback in this slice.
-- Raw `model.invoke` with an explicit JSON-schema `response_format`
-  plus manual `JSON.parse` + Zod validation, instead of
-  `withStructuredOutput`. Measured cause: the structured wrapper hangs
-  until the invoke timeout on unparsable model output instead of
-  raising a parse error (single stub hit, ~timeout delay, no parse
-  exception). Manual parsing fails closed immediately as
-  `VALIDATION_FAILED`. Covered by a focused stub regression.
-- No automatic retries anywhere in the translation path. Measured
-  cause: LangChain's `AsyncCaller` defaults to 6 retries with backoff
-  (the OpenAI SDK client itself is already fixed at 0 retries), which
-  turned a failing stub into a multi-second hang. The adapter sets
-  `maxRetries: 0`; a 500 produces exactly one request and an immediate
-  `INTERNAL` degradation. Covered by a single-hit stub regression.
-- Prompt assembly (`buildTranslationPrompt`, glossary, version stamp
-  `urbuddy-id-translation-v1`) is domain-owned in
-  `src/modules/language/translation.ts`. The adapter only maps
-  application-owned `{role, content}` messages onto LangChain messages
-  and transports them. This keeps application contracts independent of
-  LangChain classes and satisfies the adapters-port-type-only boundary
-  (dependency-cruiser refined to admit `language/translation` as a
-  type-only port, mirroring the perception ports).
-- Translation never fails transcription. The scheduler reports per-unit
-  degradation events and a summary (`committed`, `staleRejected`,
-  `degraded`, `requests`, token usage where observable, `failed`); the
-  port returns the transcription result with the translation summary
-  attached.
-- Authorization: translation requires explicit `--translate`, effective
-  network egress, a separate `OPENAI_API_KEY` (never `MODEL_API_KEY`),
-  the pinned `https://api.openai.com/v1` endpoint, and a stderr
-  disclosure. Loopback test endpoints use a fixed sentinel credential
-  and never read the operator key (same pattern as the speech
-  adapter).
+Translation is a separate, opt-in operation on immutable transcript revisions.
+The CLI resolves translation settings once from its operation flags and
+built-in defaults. The defaults are `auto` source interpretation, `id` target,
+`openai` provider, and `gpt-6-luna` model. Validated canonical locale tags
+express intent. Product support and model quality for each language remain
+qualification questions. Translation source settings leave Muse recognition
+settings untouched. Code-switched spans retain their meaning, and the prompt
+asks the model to preserve spans already spoken in the target language.
 
-## Consequences
+The composition root selects OpenAI, the only implemented provider. It
+rejects unsupported providers and model identifiers, missing credentials,
+invalid endpoints and unauthorized egress before acquisition. A failed
+enablement rejects the operation. A translation failure during an admitted
+operation preserves transcription and produces translation degradation.
+The production endpoint is `https://api.openai.com/v1`. Test translation
+accepts a numeric IPv4 loopback destination and uses a sentinel credential.
+Bilingual loopback requires paired loopback endpoints and the checked
+synthetic smoke WAV, whose PCM is snapshotted before egress. Native capture
+is excluded. The production and loopback recipients are disclosed separately.
 
-- Provisional output is bounded by debounce plus a minimum-word delta;
-  committed output is sequential per operation with a bounded backlog
-  that degrades explicitly instead of dropping work silently.
-- Stale responses (superseded revisions, post-final provisionals,
-  duplicate finals) are rejected by identity, never by timing.
-- Token usage is captured opportunistically from response metadata;
-  cost accounting remains estimate-grade until live qualification.
-- No WER/accuracy claim: the synthetic corpus carries human-authored
-  references and critical invariants for future live evaluation; the
-  deterministic suite covers runtime semantics only.
+The adapter uses LangChain Chat Completions with a documented compatible
+model selection of `gpt-6-luna` or `gpt-6.1-terra`. It requests
+`reasoning_effort: none` and JSON object mode, uses
+`max_completion_tokens: 1024`, omits sampling parameters, disables
+automatic retries, and bounds HTTP and invoke time to eight seconds.
+The installed LangChain routes `json_schema` through the SDK parse path,
+which throws for truncation before usage reaches the adapter. JSON object
+mode preserves the completion envelope for manual strict validation.
+Manual validation checks raw completion status, refusal, tools, JSON
+shape and text limits. Reported usage is validated independently of
+the completion verdict. The outbound fetch admits one exact endpoint
+and rejects redirects. The LangChain invocation installs a disabled
+trace context with empty callbacks. Inherited legacy `LANGCHAIN_TRACING`
+fails closed because the installed callback manager treats any nonempty
+value as enabled.
+
+The scheduler knows only the application-owned `TranslationProvider`
+port. It constructs a versioned system prompt and JSON user data with
+bounded source text, ordered prior source evidence, languages and
+an optional Indonesia-scoped contextual glossary. Speech, glossary
+preferences and context are treated as data. Preserve original meaning
+and unresolved fragments, including spoken instructions and delimiter-like
+text. The prompt version and glossary identity accompany each translation.
+
+## Scheduling and publication
+
+- One finalized utterance is one committed unit. Perception assigns an
+  occurrence sequence at turn creation so late finals exclude later speech
+  from context. Speaker labels are approximate attribution. Fragment
+  evidence is a source-punctuation heuristic and has no grammatical guarantee.
+- Revisions coalesce over a 400 ms window starting at the first pending
+  revision. Meaningful shorter and same-length text changes are eligible.
+  Preview validity follows source revision, discontinuity and operation
+  lifetime. The CLI emits invalidation records as space allows. Consumers
+  treat a newer source revision, gap, or terminal event as invalidating
+  the corresponding preview even if an explicit invalidation could not
+  be delivered. A sink checks validity immediately before the write.
+  Bytes already handed to a stream cannot be withdrawn.
+- Actual provider admission is sequential across committed and provisional
+  work. Committed work takes priority and requests cancellation of active
+  provisional work. It waits for local settlement before acquiring the
+  slot. The latency trade-off awaits measurement.
+- The operation admits at most 4,096 occurrence identities, 16 pending
+  partials, 16 queued committed items, and one coalescing timer. Source
+  text is limited to 4,000 UTF-8 bytes. Recent context retains at most
+  five finalized sources and 2,000 UTF-8 bytes. Exhausted identity
+  capacity degrades unseen finals without evicting earlier finality.
+- One asynchronous translation publication can be active with 32 waiting.
+  Source output retains its normal terminal backpressure. Translation
+  work stays off the recognition callback's asynchronous path, with one
+  outstanding translation write to the shared stream. A failed shared
+  sink can affect source output too. The terminal summary reports
+  publication failures and uncovered final identities within the
+  admitted bound, plus a count beyond identity capacity.
+- A gap clears context and abandons previews without synthesizing source
+  finality. A valid late final still translates. Across capture gaps
+  without aligned source timestamps, coverage is marked uncertain and
+  context remains suppressed until an observed reconnect.
+- Normal finish stops source admission, invalidates previews, and drains
+  eligible committed and publication work for at most 10 seconds including
+  a final 250 ms cancellation grace period. Failure or cancellation stops
+  admissions and signals active work. An unsettled invocation or output
+  is reported explicitly. Local settlement cannot establish remote
+  execution or billing outcomes.
+
+Evidence identifies the operation, occurrence, revision, speaker label
+where available, context references, language configuration, provider,
+model, prompt and glossary. Successful output records translation
+source-event arrival, queue delay, full-response latency, and elapsed
+time to publication attempt. Terminal evidence reports committed drain,
+local invocation starts, valid responses, invocation failures and
+cancellations, stale results, published artifacts, final coverage and
+reported usage. Missing usage stays unknown. These metrics measure local
+translation work. End-to-end audio latency and semantic quality have
+separate qualification gates.
+
+## Provider references
+
+- [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
+- [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+- [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)

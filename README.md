@@ -39,7 +39,7 @@ captured output.
 
 ## Capabilities
 
-<p align="center"><img src="assets/brand/capabilities.svg" width="100%" alt="Capabilities. Live captions, contextual translation, comprehension recovery, and personal vocabulary — all planned; foundation shipped in 0.1.0." /></p>
+<p align="center"><img src="assets/brand/capabilities.svg" width="100%" alt="Capabilities. Initial speech transcription implemented, contextual translation in progress, catch-up and vocabulary planned." /></p>
 
 Four planned capabilities, one per product workflow
 ([docs/product.md](./docs/product.md)): live bilingual captions,
@@ -161,6 +161,21 @@ permission the ceiling denies. Forbidden grants fail fast.
 | `URBUDDY_TRANSCRIBE_ENDPOINT` | (no flag; loopback-only WebSocket URL for local smoke/test servers; production uses `wss://api.meta.ai`) |
 | `OPENAI_API_KEY`              | (no flag; translation credential for `--translate`; never reused from `MODEL_API_KEY`)                   |
 | `URBUDDY_TRANSLATE_ENDPOINT`  | (no flag; loopback-only HTTP URL for local smoke/test servers; production uses `https://api.openai.com`) |
+
+Translation is off by default. Its command options override built-in defaults
+for one operation. Muse recognition settings are independent of translation
+source interpretation. This example configures the initial defaults explicitly
+and sends transcript text and recent context to OpenAI.
+
+```sh
+pnpm build
+node dist/bootstrap/main.js transcribe --file sample.wav --translate --source-language auto \
+  --target-language id --translation-provider openai \
+  --translation-model gpt-6-luna --allow-egress --json
+```
+
+Use `--allow-child` for native capture. See [translation contracts](docs/decisions/007-live-language-engine.md)
+and the [authored evaluation corpus](evaluation/language/README.md) for model and test scope.
 
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit

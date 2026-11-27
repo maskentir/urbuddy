@@ -170,15 +170,7 @@ function handshakeMode(text) {
 }
 
 function lastSourceBlock(userText) {
-  const open = userText.lastIndexOf("<source>");
-  if (open === -1) {
-    return userText;
-  }
-  const close = userText.indexOf("</source>", open);
-  if (close === -1) {
-    return userText;
-  }
-  return userText.slice(open + "<source>".length, close);
+  return JSON.parse(userText).source;
 }
 
 function startTranslationStub() {

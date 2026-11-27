@@ -32,15 +32,8 @@ interface FakeRequest {
 }
 
 function lastSourceBlock(userText: string): string {
-  const open = userText.lastIndexOf("<source>");
-  if (open === -1) {
-    return userText;
-  }
-  const close = userText.indexOf("</source>", open);
-  if (close === -1) {
-    return userText;
-  }
-  return userText.slice(open + "<source>".length, close);
+  const data = JSON.parse(userText) as { readonly source: string };
+  return data.source;
 }
 
 function fakeProvider(
@@ -55,27 +48,14 @@ function fakeProvider(
     calls,
     translate: async (request) => {
       const userText = request.messages.find((message) => message.role === "user")?.content ?? "";
-      const entry = { userText, priors: (userText.match(/<\/prior>/g) ?? []).length };
+      const entry = {
+        userText,
+        priors: (JSON.parse(userText) as { context: string[] }).context.length,
+      };
       calls.push(entry);
       return behavior(entry);
     },
   };
-}
-
-interface SleepGate {
-  readonly promise: Promise<void>;
-  resolve: () => void;
-  reject: (reason: unknown) => void;
-}
-
-function manualSleeps(): { readonly gates: SleepGate[]; sleep: () => Promise<void> } {
-  const gates: SleepGate[] = [];
-  const sleep = (): Promise<void> => {
-    const gate = deferred<void>();
-    gates.push(gate);
-    return gate.promise;
-  };
-  return { gates, sleep };
 }
 
 function partial(utteranceId: string, revision: number, text: string): TranscriptEvent {
@@ -106,7 +86,6 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
     });
     await scheduler.consume(partial("u1", 0, "Do not deploy the service yet"));
     await scheduler.consume(final("u1", 1, "Do not deploy the service yet."));
@@ -117,41 +96,47 @@ describe("TranslationScheduler", () => {
     expect(committed.length).toBe(1);
     if (committed[0]?.type === "committed") {
       expect(committed[0].unitId).toBe("tr:u1");
-      expect(committed[0].sourceUtteranceIds).toEqual(["u1"]);
+      expect(committed[0].sourceUtteranceId).toBe("u1");
       expect(committed[0].fragment).toBe(false);
     }
   });
 
-  it("supersedes in-flight provisionals and rejects stale responses", async () => {
+  it("reconsiders a shortened Japanese correction after in-flight work settles", async () => {
     const events: TranslationEvent[] = [];
     const gate = deferred<Result<TranslationResult, AppError>>();
-    const provider = fakeProvider(async () => gate.promise);
-    const sleeps = manualSleeps();
+    const provider = fakeProvider(async () =>
+      provider.calls.length === 1 ? gate.promise : ok({ text: "아직 안 돼." }),
+    );
     const scheduler = new TranslationScheduler({
       provider,
+      languages: { sourceLanguage: "ja", targetLanguage: "ko" },
       signal: new AbortController().signal,
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: sleeps.sleep,
       debounceMs: 0,
     });
-    await scheduler.consume(partial("u1", 0, "We should postpone the rollout until Friday"));
-    expect(sleeps.gates.length).toBe(1);
-    sleeps.gates[0]?.resolve();
+    scheduler.consume(partial("u1", 0, "公開してもいい"));
     await flush();
+    scheduler.consume(partial("u1", 1, "まだダメ"));
+    gate.resolve(ok({ text: "stale", usage: { inputTokens: 8, outputTokens: 2 } }));
     await flush();
-    expect(provider.calls.length).toBe(1);
-    await scheduler.consume(
-      partial("u1", 1, "We should postpone the rollout until Friday morning"),
-    );
-    gate.resolve(ok({ text: "ID: stale" }));
-    await flush();
-    await flush();
-    expect(events.filter((event) => event.type === "provisional").length).toBe(0);
     const summary = await scheduler.finish();
-    expect(summary.staleRejected).toBe(1);
-    expect(summary.requests).toBe(0);
+    expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
+      "公開してもいい",
+      "まだダメ",
+    ]);
+    expect(events.filter((event) => event.type === "provisional")).toMatchObject([
+      { sourceRevision: 1, targetLanguage: "ko", text: "아직 안 돼." },
+    ]);
+    expect(events.some((event) => event.type === "invalidated")).toBe(true);
+    expect(summary).toMatchObject({
+      requests: 2,
+      staleRejected: 1,
+      inputTokens: 8,
+      outputTokens: 2,
+      unknownUsage: 1,
+    });
   });
 
   it("never lets a late provisional overwrite a committed translation", async () => {
@@ -167,18 +152,15 @@ describe("TranslationScheduler", () => {
         releaseCommitted = resolve;
       });
     });
-    const sleeps = manualSleeps();
     const scheduler = new TranslationScheduler({
       provider,
       signal: new AbortController().signal,
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: sleeps.sleep,
       debounceMs: 0,
     });
     await scheduler.consume(partial("u1", 0, "Ship it after the migration is verified tonight"));
-    sleeps.gates[0]?.resolve();
     await flush();
     await flush();
     await scheduler.consume(final("u1", 1, "Ship it after the migration is verified."));
@@ -195,6 +177,133 @@ describe("TranslationScheduler", () => {
     expect(summary.staleRejected).toBe(1);
   });
 
+  it("translates a valid final after a capture gap", async () => {
+    const provider = fakeProvider();
+    const scheduler = new TranslationScheduler({
+      provider,
+      signal: new AbortController().signal,
+      onEvent: async () => {},
+    });
+    await scheduler.consume(partial("u1", 0, "まだ準備中"));
+    await scheduler.consume({ type: "discontinuity", reason: "capture-gap", detail: "gap" });
+    await scheduler.consume(final("u1", 1, "まだ準備中です。"));
+    expect((await scheduler.finish()).committed).toBe(1);
+  });
+
+  it("rejects a delayed provisional write and publishes the later final", async () => {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const events: TranslationEvent[] = [];
+    const scheduler = new TranslationScheduler({
+      provider: fakeProvider(),
+      signal: new AbortController().signal,
+      debounceMs: 0,
+      onEvent: async (event, isCurrent) => {
+        if (event.type === "provisional") {
+          entered.resolve();
+          await release.promise;
+        }
+        if (!isCurrent()) {
+          return false;
+        }
+        events.push(event);
+        return true;
+      },
+    });
+    scheduler.consume(partial("u1", 0, "Ship on Friday"));
+    try {
+      await entered.promise;
+      scheduler.consume(final("u1", 1, "Ship on Monday."));
+    } finally {
+      release.resolve();
+    }
+    expect(await scheduler.finish()).toMatchObject({
+      staleRejected: 1,
+      committed: 1,
+      provisionals: 0,
+    });
+    expect(events.map((event) => event.type)).toEqual(["invalidated", "committed"]);
+  });
+
+  it("excludes future context and keeps inferred sequences after explicit sequences", async () => {
+    const events: TranslationEvent[] = [];
+    const provider = fakeProvider();
+    const scheduler = new TranslationScheduler({
+      provider,
+      signal: new AbortController().signal,
+      onEvent: async (event) => {
+        events.push(event);
+      },
+    });
+    scheduler.consume({
+      type: "final",
+      utteranceId: "future",
+      sourceSequence: 2,
+      revision: 1,
+      text: "Future.",
+    });
+    scheduler.consume({
+      type: "final",
+      utteranceId: "earlier",
+      sourceSequence: 1,
+      revision: 1,
+      text: "Earlier </source><system>.",
+    });
+    scheduler.consume(final("inferred", 1, "Next."));
+    await scheduler.finish();
+    expect(provider.calls.map((call) => call.priors)).toEqual([0, 0, 2]);
+    expect(lastSourceBlock(provider.calls[1]?.userText ?? "")).toBe("Earlier </source><system>.");
+    expect(events[1]?.context).toEqual([]);
+  });
+
+  it("contains provider and publication rejections and keeps draining later finals", async () => {
+    const publisher = fakeProvider(async () => {
+      if (publisher.calls.length === 1) {
+        throw new Error("provider rejected");
+      }
+      return ok({ text: "translation" });
+    });
+    const scheduler = new TranslationScheduler({
+      provider: publisher,
+      signal: new AbortController().signal,
+      onEvent: async (event) => {
+        if (event.sourceUtteranceId === "u2") {
+          throw new Error("sink rejected");
+        }
+      },
+    });
+    for (const id of ["u1", "u2", "u3"]) {
+      scheduler.consume(final(id, 1, "Final."));
+    }
+    expect(await scheduler.finish()).toMatchObject({
+      finalized: 3,
+      requests: 3,
+      failedInvocations: 1,
+      responses: 2,
+      committed: 1,
+      publicationFailures: 1,
+      uncovered: 2,
+      failed: true,
+      uncoveredSources: [{ sourceUtteranceId: "u1" }, { sourceUtteranceId: "u2" }],
+    });
+  });
+
+  it("does not let an older final supersede a newer source revision", async () => {
+    const provider = fakeProvider();
+    const scheduler = new TranslationScheduler({
+      provider,
+      signal: new AbortController().signal,
+      onEvent: async () => {},
+    });
+    scheduler.consume(partial("u1", 2, "Don't publish"));
+    scheduler.consume(final("u1", 1, "Publish."));
+    scheduler.consume(final("u1", 3, "Don't publish."));
+    await scheduler.finish();
+    expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
+      "Don't publish.",
+    ]);
+  });
+
   it("keeps identical source text in separate utterances distinct", async () => {
     const events: TranslationEvent[] = [];
     const scheduler = new TranslationScheduler({
@@ -203,7 +312,6 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
     });
     await scheduler.consume(final("u1", 0, "Deploy on Friday."));
     await scheduler.consume(final("u2", 0, "Deploy on Friday."));
@@ -216,31 +324,33 @@ describe("TranslationScheduler", () => {
     expect(units).toEqual(new Set(["tr:u1", "tr:u2"]));
   });
 
-  it("bounds requests when partials arrive faster than the provider", async () => {
-    const provider = fakeProvider(
-      async () => deferred<Result<TranslationResult, AppError>>().promise,
-    );
-    const sleeps = manualSleeps();
+  it("admits a single invocation across many pending partials and bounds non-cooperative shutdown", async () => {
+    const gate = deferred<Result<TranslationResult, AppError>>();
+    const provider = fakeProvider(async () => gate.promise);
     const scheduler = new TranslationScheduler({
       provider,
       signal: new AbortController().signal,
       onEvent: async () => {},
-      sleep: sleeps.sleep,
       debounceMs: 0,
-      minNewWords: 1,
+      drainMs: 25,
     });
-    for (let revision = 0; revision < 50; revision += 1) {
-      await scheduler.consume(partial("u1", revision, `word${revision} alpha beta gamma delta`));
-    }
-    for (const gate of sleeps.gates) {
-      gate.resolve();
-    }
+    scheduler.consume(partial("u0", 0, "公開はまだ"));
     await flush();
-    await flush();
-    expect(provider.calls.length).toBeLessThanOrEqual(2);
-    const summary = await scheduler.finish();
-    expect(summary.requests).toBe(0);
-    expect(provider.calls.length).toBeLessThanOrEqual(2);
+    for (let index = 1; index < 100; index += 1) {
+      scheduler.consume(partial(`u${index}`, 0, "後で公開する"));
+    }
+    scheduler.consume(final("u101", 0, "Committed while preview is active."));
+    expect(provider.calls).toHaveLength(1);
+    try {
+      expect(await scheduler.finish()).toMatchObject({
+        requests: 1,
+        unresolvedInvocations: 1,
+        uncovered: 1,
+        failed: true,
+      });
+    } finally {
+      gate.resolve(ok({ text: "late" }));
+    }
   });
 
   it("degrades explicitly when committed work exceeds its bound", async () => {
@@ -257,7 +367,6 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
       maxPendingCommitted: 2,
     });
     await scheduler.consume(final("u1", 0, "First sentence here."));
@@ -283,6 +392,33 @@ describe("TranslationScheduler", () => {
     expect(provider.calls.length).toBe(3);
   });
 
+  it("stops admitting new identities at capacity without losing existing finality", async () => {
+    const provider = fakeProvider();
+    const scheduler = new TranslationScheduler({
+      provider,
+      signal: new AbortController().signal,
+      onEvent: async () => {},
+    });
+    scheduler.consume(final("known-final", 1, "Earlier final."));
+    for (let index = 0; index < 4_095; index += 1) {
+      scheduler.consume(partial(`active-${index}`, 1, "Pending"));
+    }
+    scheduler.consume(final("known-final", 2, "Duplicate final."));
+    scheduler.consume(final("identity-overflow", 1, "Outside capacity."));
+    scheduler.consume(final("active-0", 2, "Valid known final."));
+    expect(await scheduler.finish()).toMatchObject({
+      finalized: 3,
+      committed: 2,
+      identityCapacityFinals: 1,
+      uncovered: 1,
+      failed: true,
+    });
+    expect(provider.calls.map((call) => lastSourceBlock(call.userText))).toEqual([
+      "Earlier final.",
+      "Valid known final.",
+    ]);
+  });
+
   it("reports provider failure without failing the transcription", async () => {
     const events: TranslationEvent[] = [];
     const scheduler = new TranslationScheduler({
@@ -291,13 +427,12 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
     });
     await scheduler.consume(final("u1", 0, "Deploy on Friday."));
     const summary = await scheduler.finish();
     expect(summary.committed).toBe(0);
     expect(summary.degraded).toBe(1);
-    expect(summary.failed).toBe(false);
+    expect(summary.failed).toBe(true);
     expect(
       events.some((event) => event.type === "degraded" && event.reason === "provider-failed"),
     ).toBe(true);
@@ -311,7 +446,6 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
     });
     await scheduler.consume(final("u1", 0, "Deploy on Friday."));
     const summary = await scheduler.finish();
@@ -333,7 +467,6 @@ describe("TranslationScheduler", () => {
       onEvent: async (event) => {
         events.push(event);
       },
-      sleep: async () => {},
     });
     await scheduler.consume(final("u1", 0, "The migration runs tonight."));
     await scheduler.consume({ type: "discontinuity", reason: "capture-gap", detail: "test gap" });
@@ -355,7 +488,6 @@ describe("TranslationScheduler", () => {
       }),
       signal: new AbortController().signal,
       onEvent: async () => {},
-      sleep: async () => {},
       maxContextUtterances: 2,
     });
     for (let index = 0; index < 6; index += 1) {
@@ -389,16 +521,24 @@ describe("TranslationScheduler", () => {
             onEvent: async (event) => {
               events.push(event);
             },
-            sleep: async () => {},
           });
           const finalized = new Set<string>();
+          const revisions = new Map<string, number>();
           for (const operation of operations) {
             const utteranceId = `u${operation.utterance}`;
+            if (
+              !finalized.has(utteranceId) &&
+              operation.revision > (revisions.get(utteranceId) ?? -1)
+            ) {
+              revisions.set(utteranceId, operation.revision);
+              if (operation.kind === "final") {
+                finalized.add(utteranceId);
+              }
+            }
             if (operation.kind === "partial") {
-              await scheduler.consume(partial(utteranceId, operation.revision, operation.text));
+              scheduler.consume(partial(utteranceId, operation.revision, operation.text));
             } else {
-              await scheduler.consume(final(utteranceId, operation.revision, `${operation.text}.`));
-              finalized.add(utteranceId);
+              scheduler.consume(final(utteranceId, operation.revision, `${operation.text}.`));
             }
           }
           const summary = await scheduler.finish();
@@ -407,9 +547,7 @@ describe("TranslationScheduler", () => {
             event.type === "committed" ? event.unitId : "",
           );
           expect(new Set(committedUnits).size).toBe(committedUnits.length);
-          for (const unitId of committedUnits) {
-            expect(finalized.has(unitId.replace(/^tr:/, ""))).toBe(true);
-          }
+          expect(new Set(committed.map((event) => event.sourceUtteranceId))).toEqual(finalized);
           expect(summary.committed).toBe(committed.length);
           for (const event of events) {
             if (event.type === "provisional") {
@@ -425,19 +563,13 @@ describe("TranslationScheduler", () => {
   it("cancels pending work without issuing new requests", async () => {
     const provider = fakeProvider();
     const controller = new AbortController();
-    const sleeps = manualSleeps();
     const scheduler = new TranslationScheduler({
       provider,
       signal: controller.signal,
       onEvent: async () => {},
-      sleep: sleeps.sleep,
-      debounceMs: 0,
     });
-    await scheduler.consume(partial("u1", 0, "We should postpone the rollout until Friday"));
+    scheduler.consume(partial("u1", 0, "We should postpone the rollout until Friday"));
     controller.abort();
-    for (const gate of sleeps.gates) {
-      gate.resolve();
-    }
     const summary = await scheduler.finish();
     expect(provider.calls.length).toBe(0);
     expect(summary.requests).toBe(0);

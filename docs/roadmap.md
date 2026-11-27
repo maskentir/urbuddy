@@ -51,7 +51,7 @@ PR:
    loss or duplication). Met by
    [PR #7](https://github.com/maskentir/urbuddy/pull/7).
 
-## 3. Speech Perception — next
+## 3. Speech Perception — done
 
 Product outcome: real-time English transcription of live meetings,
 including accented and fast speech, with reconnect and gap accounting.
@@ -79,8 +79,9 @@ PR:
 
 ## 4. Live Language Engine — next
 
-Product outcome: reliable English–Indonesian translation that stays
-readable while speech is still in flight. Implementation in progress
+Product outcome: contextual translation between configured languages that
+stays readable while speech is still in flight. Automatic source interpretation
+and Indonesian output are the initial personalized defaults. Implementation in progress
 (`feat/live-language-engine`); live model qualification not yet
 authorized.
 

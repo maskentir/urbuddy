@@ -67,15 +67,8 @@ function fakeSpeech(events: SpeechProviderEvent[]): SpeechProvider {
 }
 
 function lastSourceBlock(userText: string): string {
-  const open = userText.lastIndexOf("<source>");
-  if (open === -1) {
-    return userText;
-  }
-  const close = userText.indexOf("</source>", open);
-  if (close === -1) {
-    return userText;
-  }
-  return userText.slice(open + "<source>".length, close);
+  const data = JSON.parse(userText) as { readonly source: string };
+  return data.source;
 }
 
 function echoTranslator(): TranslationProvider {
@@ -140,17 +133,97 @@ describe("transcribe port with translation", () => {
     });
     expect(outcome.isOk()).toBe(true);
     expect(lines.some((line) => line.includes("[final] Do not deploy it yet."))).toBe(true);
-    expect(lines.some((line) => line.includes("[translation] ID: Do not deploy it yet."))).toBe(
-      true,
-    );
-    expect(lines.some((line) => line.includes("translation complete: committed=1"))).toBe(true);
-    expect(errLines.some((line) => line.includes("transcripts will be sent"))).toBe(true);
+    expect(
+      lines.some(
+        (line) =>
+          line.startsWith("[translation committed auto → id ") &&
+          line.endsWith("ID: Do not deploy it yet."),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes("translation complete: committed=1/1"))).toBe(true);
+    expect(
+      errLines.some((line) => line.includes("transcript text and recent context will be sent")),
+    ).toBe(true);
     if (outcome.isOk() && outcome.value.translation !== undefined) {
       expect(outcome.value.translation.committed).toBe(1);
       expect(outcome.value.translation.failed).toBe(false);
     } else {
       expect.unreachable();
     }
+  });
+
+  it.each([
+    { sourceLanguage: "bad_tag" },
+    { targetLanguage: "auto" },
+    { translationProvider: "unsupported" },
+    { translationModel: "unavailable-model" },
+  ])(
+    "rejects invalid translation configuration before speech construction or WAV acquisition: %j",
+    async (translationFlags) => {
+      let speechConstructed = false;
+      let wavOpened = false;
+      const port = createTranscribePort({
+        clock: { now: () => 0, isoNow: () => "" },
+        loopbackEndpoint: false,
+        translationLoopbackEndpoint: false,
+        createProvider: () => {
+          speechConstructed = true;
+          return ok(fakeSpeech([]));
+        },
+        createTranslator: () => err(appError("CONFIG_INVALID", "unsupported translation model")),
+        openWav: async () => {
+          wavOpened = true;
+          return ok(wavSource());
+        },
+      });
+      const outcome = await port({
+        file: "input.wav",
+        mode: "endpointing",
+        keywords: [],
+        json: true,
+        translate: true,
+        translationFlags,
+        signal: new AbortController().signal,
+        output: { out: () => {}, errLine: () => {} },
+        env: {},
+      });
+      expect(outcome.isErr() && outcome.error.code).toBe("CONFIG_INVALID");
+      expect(speechConstructed).toBe(false);
+      expect(wavOpened).toBe(false);
+    },
+  );
+
+  it.each([
+    { speech: false, translation: true, file: "input.wav" },
+    { speech: true, translation: false, file: "input.wav" },
+    { speech: true, translation: true },
+  ])("denies mixed endpoints and native capture before provider creation: %j", async (options) => {
+    let providerCreations = 0;
+    const port = createTranscribePort({
+      clock: { now: () => 0, isoNow: () => "" },
+      loopbackEndpoint: options.speech,
+      translationLoopbackEndpoint: options.translation,
+      createProvider: () => {
+        providerCreations += 1;
+        return ok(fakeSpeech([]));
+      },
+      createTranslator: () => {
+        providerCreations += 1;
+        return ok(echoTranslator());
+      },
+    });
+    const outcome = await port({
+      ...("file" in options ? { file: options.file } : {}),
+      mode: "endpointing",
+      keywords: [],
+      json: true,
+      translate: true,
+      signal: new AbortController().signal,
+      output: { out: () => {}, errLine: () => {} },
+      env: {},
+    });
+    expect(outcome.isErr() && outcome.error.code).toBe("CONFIG_INVALID");
+    expect(providerCreations).toBe(0);
   });
 
   it("keeps STT-only runs working without a translator", async () => {

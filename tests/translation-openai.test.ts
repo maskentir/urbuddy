@@ -11,8 +11,9 @@ import {
   TRANSLATE_API_KEY_ENV,
   TRANSLATE_ENDPOINT_ENV,
 } from "@adapters/translation/openai";
-import { buildTranslationRequest, DEFAULT_TECHNICAL_GLOSSARY } from "@modules/language/translation";
-import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_TRANSLATION_LANGUAGES } from "@modules/config/translation";
+import { buildTranslationRequest } from "@modules/language/translation";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 interface RecordedRequest {
   readonly url: string;
@@ -75,7 +76,10 @@ class StubServer {
         this.respond(recorded, response);
       })();
     });
-    this.listening = new Promise<void>((resolve) => this.server.once("listening", resolve));
+    this.listening = new Promise<void>((resolve, reject) => {
+      this.server.once("listening", resolve);
+      this.server.once("error", reject);
+    });
     this.server.listen(0, "127.0.0.1");
   }
 
@@ -134,7 +138,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       buildTranslationRequest(
         "Don't deploy it yet.",
         ["The release is tonight."],
-        DEFAULT_TECHNICAL_GLOSSARY,
+        DEFAULT_TRANSLATION_LANGUAGES,
         new AbortController().signal,
       ),
     );
@@ -151,8 +155,105 @@ describe("OpenAI translation adapter (local stub)", () => {
     expect(body.model).toBe(OPENAI_TRANSLATION_MODEL_ID);
     expect(stub.requests[0]?.authorization).toBe("Bearer loopback-translate-credential");
     const joined = JSON.stringify(body.messages);
-    expect(joined).toContain("urbuddy-id-translation-v1");
-    expect(joined).toContain("<source>Don't deploy it yet.</source>");
+    expect(joined).toContain("urbuddy-translation-v2");
+    expect(joined).toContain("Don't deploy it yet.");
+    expect(stub.requests[0]?.body).toMatchObject({
+      reasoning_effort: "none",
+      max_completion_tokens: 1024,
+      response_format: { type: "json_object" },
+    });
+    expect(stub.requests[0]?.body).not.toHaveProperty("temperature");
+  });
+
+  it("keeps inherited LangSmith tracing disabled during a configured model invocation", async () => {
+    const inference = stubServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(completionResponse("公開しないでください。"));
+    });
+    const tracing = stubServer((_request, response) => response.writeHead(200).end("{}"));
+    vi.stubEnv("LANGSMITH_TRACING", "true");
+    vi.stubEnv("LANGCHAIN_TRACING_V2", "true");
+    vi.stubEnv("LANGSMITH_ENDPOINT", await tracing.url());
+    vi.stubEnv("LANGSMITH_API_KEY", "test-sentinel");
+    try {
+      const model = createOpenAITranslationProvider({
+        apiKey: "private-sentinel",
+        modelId: "gpt-6.1-terra",
+        testEndpoint: await inference.url(),
+      });
+      const outcome = await model.translate(
+        buildTranslationRequest(
+          "Do not publish.",
+          [],
+          { sourceLanguage: "en", targetLanguage: "ja" },
+          new AbortController().signal,
+        ),
+      );
+      expect(outcome.isOk()).toBe(true);
+      expect(inference.requests[0]?.body).toMatchObject({
+        model: "gpt-6.1-terra",
+        reasoning_effort: "none",
+        max_completion_tokens: 1024,
+      });
+      expect(tracing.requests).toHaveLength(0);
+      vi.stubEnv("LANGCHAIN_TRACING", "true");
+      const blocked = await model.translate(
+        buildTranslationRequest(
+          "second invocation",
+          [],
+          DEFAULT_TRANSLATION_LANGUAGES,
+          new AbortController().signal,
+        ),
+      );
+      expect(blocked.isErr()).toBe(true);
+      expect(inference.requests).toHaveLength(1);
+      expect(tracing.requests).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    { finish: "length", refusal: null, translation: { translation: "valid JSON" } },
+    { finish: "stop", refusal: "declined", translation: { translation: "valid JSON" } },
+    { finish: "stop", refusal: null, translation: { translation: "valid JSON", extra: true } },
+    { finish: "stop", refusal: null, translation: { translation: "   " } },
+  ])("rejects incomplete or invalid completions while retaining usage: %j", async (sample) => {
+    const stub = stubServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ...JSON.parse(completionResponse("x")),
+          choices: [
+            {
+              index: 0,
+              finish_reason: sample.finish,
+              message: {
+                role: "assistant",
+                content: JSON.stringify(sample.translation),
+                refusal: sample.refusal,
+              },
+            },
+          ],
+        }),
+      );
+    });
+    const provider = createOpenAITranslationProvider({
+      apiKey: "sentinel",
+      testEndpoint: await stub.url(),
+    });
+    const outcome = await provider.translate(
+      buildTranslationRequest(
+        "Hello.",
+        [],
+        DEFAULT_TRANSLATION_LANGUAGES,
+        new AbortController().signal,
+      ),
+    );
+    expect(outcome.isErr() && outcome.error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      usage: { inputTokens: 50, outputTokens: 10 },
+    });
   });
 
   it("never forwards an operator credential to a loopback stub", async () => {
@@ -172,7 +273,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       buildTranslationRequest(
         "Hello.",
         [],
-        DEFAULT_TECHNICAL_GLOSSARY,
+        DEFAULT_TRANSLATION_LANGUAGES,
         new AbortController().signal,
       ),
     );
@@ -235,7 +336,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       buildTranslationRequest(
         "Hello.",
         [],
-        DEFAULT_TECHNICAL_GLOSSARY,
+        DEFAULT_TRANSLATION_LANGUAGES,
         new AbortController().signal,
       ),
     );
@@ -258,7 +359,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       buildTranslationRequest(
         "Hello.",
         [],
-        DEFAULT_TECHNICAL_GLOSSARY,
+        DEFAULT_TRANSLATION_LANGUAGES,
         new AbortController().signal,
       ),
     );
@@ -283,12 +384,39 @@ describe("OpenAI translation adapter (local stub)", () => {
       buildTranslationRequest(
         "Hello.",
         [],
-        DEFAULT_TECHNICAL_GLOSSARY,
+        DEFAULT_TRANSLATION_LANGUAGES,
         new AbortController().signal,
       ),
     );
     expect(outcome.isErr()).toBe(true);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("signals cancellation to the transport while a request is active", async () => {
+    const arrived = Promise.withResolvers<void>();
+    const disconnected = Promise.withResolvers<void>();
+    const stub = stubServer((_request, response) => {
+      response.once("close", () => disconnected.resolve());
+      arrived.resolve();
+    });
+    const controller = new AbortController();
+    const provider = createOpenAITranslationProvider({
+      apiKey: "key",
+      testEndpoint: await stub.url(),
+      timeoutMs: 1_000,
+    });
+    const outcome = provider.translate(
+      buildTranslationRequest("Hello.", [], DEFAULT_TRANSLATION_LANGUAGES, controller.signal),
+    );
+    try {
+      await arrived.promise;
+    } finally {
+      controller.abort();
+    }
+    const result = await outcome;
+    expect(result.isErr() && result.error.code).toBe("CANCELLED");
+    await disconnected.promise;
+    expect(stub.requests).toHaveLength(1);
   });
 
   it("reports cancellation without sending when already aborted", async () => {
@@ -303,7 +431,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const controller = new AbortController();
     controller.abort();
     const outcome = await provider.translate(
-      buildTranslationRequest("Hello.", [], DEFAULT_TECHNICAL_GLOSSARY, controller.signal),
+      buildTranslationRequest("Hello.", [], DEFAULT_TRANSLATION_LANGUAGES, controller.signal),
     );
     expect(outcome.isErr()).toBe(true);
     if (outcome.isErr()) {

@@ -263,11 +263,11 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
     .option("--mode <mode>", "recognition mode (endpointing or diarization)", "endpointing")
     .option("--keywords <terms>", "comma-separated vocabulary biasing terms")
     .option("--json", "emit one stable JSON object per line", false)
-    .option(
-      "--translate",
-      "also translate speech to Indonesian via OpenAI (requires --allow-egress)",
-      false,
-    )
+    .option("--translate", "send transcript text for translation (requires --allow-egress)", false)
+    .option("--source-language <tag>", "translation source language tag or auto")
+    .option("--target-language <tag>", "translation target language tag")
+    .option("--translation-provider <name>", "translation provider")
+    .option("--translation-model <id>", "compatible translation model")
     .action(
       async (options: {
         provider: string;
@@ -277,6 +277,10 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
         keywords?: string;
         json: boolean;
         translate: boolean;
+        sourceLanguage?: string;
+        targetLanguage?: string;
+        translationProvider?: string;
+        translationModel?: string;
       }) => {
         if (deps.transcribePort === undefined) {
           throw new Error("transcribe is not wired");
@@ -315,6 +319,20 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
           keywords,
           json: options.json,
           translate: options.translate,
+          translationFlags: {
+            ...(options.sourceLanguage === undefined
+              ? {}
+              : { sourceLanguage: options.sourceLanguage }),
+            ...(options.targetLanguage === undefined
+              ? {}
+              : { targetLanguage: options.targetLanguage }),
+            ...(options.translationProvider === undefined
+              ? {}
+              : { translationProvider: options.translationProvider }),
+            ...(options.translationModel === undefined
+              ? {}
+              : { translationModel: options.translationModel }),
+          },
           signal: deps.signal,
           output,
           env: process.env,

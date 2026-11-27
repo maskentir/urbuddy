@@ -146,8 +146,14 @@ function cliDepsFrom(
       ...(isPermitted(app.policy, "network-egress")
         ? {
             createProvider: createMuseProviderFromEnv,
-            createTranslator: createTranslationProviderFromEnv,
-            openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
+            createTranslator: (providerEnv, translation) => {
+              switch (translation.provider) {
+                case "openai":
+                  return createTranslationProviderFromEnv(providerEnv, translation.model);
+              }
+            },
+            openWav: (path, smokeFixtureOnly) =>
+              openWavSource(path, { pacing: "realtime", smokeFixtureOnly }),
           }
         : {}),
       ...(isPermitted(app.policy, "spawn-child-process")

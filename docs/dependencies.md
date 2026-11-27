@@ -64,3 +64,9 @@ OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 | vite, react-devtools-core      | Peer-resolved transitively at install; not direct dependencies.                                                                                                                                |
 | vite-tsconfig-paths@6.1.1      | Tried for test-time alias resolution; removed after Vitest's native `resolve.tsconfigPaths` proved sufficient. Fewer deps win.                                                                 |
 | native Node WebSocket client   | Evaluated for the Muse adapter; rejected: no inbound payload bound, weak termination control for lifecycle tests, and no server for deterministic local protocol tests. `ws` covers all three. |
+
+The translation adapter uses direct LangChain Chat Completions invocation,
+strict completion and JSON validation, and an explicit tracing context. The
+application scheduler and evaluation runner use the same application-owned
+port and exchange no SDK types. See [ADR-007](decisions/007-live-language-engine.md)
+for the wire contract and acceptance status.
