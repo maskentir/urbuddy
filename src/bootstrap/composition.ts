@@ -4,14 +4,13 @@ import { join } from "node:path";
 import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capture-source";
 import { openWavSource } from "@adapters/audio/wav-source";
 import {
-  createMuseProvider,
+  createMuseProviderFromEnv,
   isLoopbackEndpoint,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
-  resolveMuseEndpoint,
 } from "@adapters/speech/muse";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
-import { appError, formatError, toAppError, type AppError } from "@kernel/errors";
+import { formatError, toAppError, type AppError } from "@kernel/errors";
 import { EXIT_CODES, type ExitCode } from "@kernel/exit-codes";
 import {
   createCryptoIdGenerator,
@@ -140,36 +139,7 @@ function cliDepsFrom(
       loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
       ...(isPermitted(app.policy, "network-egress")
         ? {
-            createProvider: (env: Readonly<Record<string, string | undefined>>) => {
-              const apiKey = env["MODEL_API_KEY"];
-              if (apiKey === undefined || apiKey.trim().length === 0) {
-                return err(
-                  appError(
-                    "CONFIG_INVALID",
-                    "speech provider credential is not configured (set MODEL_API_KEY)",
-                  ),
-                );
-              }
-              const endpoint = resolveMuseEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]);
-              if (endpoint.isErr()) {
-                return err(endpoint.error);
-              }
-              let loopbackEndpoint: string | undefined;
-              try {
-                loopbackEndpoint =
-                  new URL(endpoint.value).host === "api.meta.ai" ? undefined : endpoint.value;
-              } catch {
-                return err(appError("VALIDATION_FAILED", "speech provider endpoint is invalid"));
-              }
-              return ok(
-                createMuseProvider({
-                  apiKey,
-                  ...(loopbackEndpoint === undefined
-                    ? {}
-                    : { testLoopbackEndpoint: loopbackEndpoint }),
-                }),
-              );
-            },
+            createProvider: createMuseProviderFromEnv,
             openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
           }
         : {}),

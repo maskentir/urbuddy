@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openWavSource } from "@adapters/audio/wav-source";
-import { createMuseProvider, isLoopbackEndpoint, resolveMuseEndpoint } from "@adapters/speech/muse";
+import {
+  createMuseProvider,
+  createMuseProviderFromEnv,
+  isLoopbackEndpoint,
+  LOOPBACK_TEST_CREDENTIAL,
+  MODEL_API_KEY_ENV,
+  MUSE_TRANSCRIBE_ENDPOINT_ENV,
+  resolveMuseEndpoint,
+} from "@adapters/speech/muse";
 import type { CaptureSource, SourceItem } from "@modules/perception/audio";
 import { runTranscription, type TranscriptEvent } from "@modules/perception/speech";
 import { createTranscribePort } from "@presentation/transcribe";
@@ -440,6 +448,49 @@ describe("resolveMuseEndpoint", () => {
     expect(isLoopbackEndpoint("wss://evil.example.com/asr")).toBe(false);
     expect(isLoopbackEndpoint("ws://evil.example.com/asr")).toBe(false);
     expect(isLoopbackEndpoint("::not-a-url::")).toBe(false);
+  });
+});
+
+describe("createMuseProviderFromEnv", () => {
+  it("never forwards an operator credential to a loopback socket", async () => {
+    server = new TestServer(happyScript());
+    const created = createMuseProviderFromEnv({
+      [MODEL_API_KEY_ENV]: "REAL-OPERATOR-KEY-MUST-NOT-LEAVE",
+      [MUSE_TRANSCRIBE_ENDPOINT_ENV]: await server.url(),
+    });
+    expect(created.isOk()).toBe(true);
+    if (created.isErr()) {
+      return;
+    }
+    const outcome = await runTranscription({
+      source: fakeSource(),
+      provider: created.value,
+      signal: new AbortController().signal,
+      mode: "endpointing",
+      keywords: [],
+      onEvent: async () => {},
+    });
+    expect(outcome.isOk()).toBe(true);
+    expect(server.receivedText.length).toBeGreaterThan(0);
+    for (const frame of server.receivedText) {
+      expect(frame).not.toContain("REAL-OPERATOR-KEY-MUST-NOT-LEAVE");
+    }
+    expect(server.receivedText[0]).toContain(LOOPBACK_TEST_CREDENTIAL);
+  });
+
+  it("needs no operator credential at all for a loopback endpoint", () => {
+    const created = createMuseProviderFromEnv({
+      [MUSE_TRANSCRIBE_ENDPOINT_ENV]: "ws://127.0.0.1:18923",
+    });
+    expect(created.isOk()).toBe(true);
+  });
+
+  it("fails closed for the production endpoint without a credential", () => {
+    const created = createMuseProviderFromEnv({});
+    expect(created.isErr()).toBe(true);
+    if (created.isErr()) {
+      expect(created.error.code).toBe("CONFIG_INVALID");
+    }
   });
 });
 

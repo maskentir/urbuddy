@@ -168,7 +168,6 @@ function handshakeMode(text) {
   }
 }
 
-const SMOKE_API_KEY = "smoke-test-key";
 const FORBIDDEN_FLAGS = ["--allow-child", "--persist", "--data-root"];
 
 function childEnv(extra) {
@@ -179,7 +178,6 @@ function childEnv(extra) {
   }
   return {
     ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
-    MODEL_API_KEY: SMOKE_API_KEY,
     ...extra.env,
   };
 }
@@ -306,7 +304,7 @@ async function positiveRun({ mode, json, fixture, server, port, label }) {
   manifest.runs.push({
     name,
     args,
-    env: { endpoint: "loopback", credential: "dummy", isolation: "allowlist" },
+    env: { endpoint: "loopback", credential: "none-sentinel-only", isolation: "allowlist" },
     exitCode: result.code,
     durationMs: result.durationMs,
     stdoutPath,
@@ -333,7 +331,7 @@ async function denialRun({ name, args, extraEnv, expectCode, endpoint }) {
     args,
     env: {
       endpoint: endpoint ?? "default",
-      credential: "dummy-allowlisted",
+      credential: "none-or-unset",
       isolation: "allowlist",
     },
     exitCode: result.code,

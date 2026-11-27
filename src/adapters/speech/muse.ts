@@ -122,6 +122,37 @@ export function isLoopbackEndpoint(raw: string | undefined): boolean {
   }
 }
 
+export const MODEL_API_KEY_ENV = "MODEL_API_KEY";
+
+export const LOOPBACK_TEST_CREDENTIAL = "loopback-test-credential";
+
+export function createMuseProviderFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): Result<SpeechProvider, AppError> {
+  const endpoint = resolveMuseEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]);
+  if (endpoint.isErr()) {
+    return err(endpoint.error);
+  }
+  if (isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV])) {
+    return ok(
+      createMuseProvider({
+        apiKey: LOOPBACK_TEST_CREDENTIAL,
+        testLoopbackEndpoint: endpoint.value,
+      }),
+    );
+  }
+  const apiKey = env[MODEL_API_KEY_ENV];
+  if (apiKey === undefined || apiKey.trim().length === 0) {
+    return err(
+      appError(
+        "CONFIG_INVALID",
+        "speech provider credential is not configured (set MODEL_API_KEY)",
+      ),
+    );
+  }
+  return ok(createMuseProvider({ apiKey }));
+}
+
 export interface MuseProviderOptions {
   readonly apiKey: string;
   readonly testLoopbackEndpoint?: string;
