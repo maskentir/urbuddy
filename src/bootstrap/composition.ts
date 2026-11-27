@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capture-source";
+import { openWavSource } from "@adapters/audio/wav-source";
+import {
+  createMuseProviderFromEnv,
+  isLoopbackEndpoint,
+  MUSE_TRANSCRIBE_ENDPOINT_ENV,
+} from "@adapters/speech/muse";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { formatError, toAppError, type AppError } from "@kernel/errors";
@@ -28,6 +34,7 @@ import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { createCapturePort } from "@presentation/capture";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
+import { createTranscribePort } from "@presentation/transcribe";
 import { err, ok, type Result } from "neverthrow";
 
 import { URBUDDY_VERSION } from "./version.js";
@@ -107,7 +114,11 @@ export function isAppContainer(value: AppContainer | { error: AppError }): value
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
-function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
+function cliDepsFrom(
+  app: AppContainer,
+  signal: AbortSignal,
+  env: Readonly<Record<string, string | undefined>>,
+): CliDeps {
   return {
     version: URBUDDY_VERSION,
     config: app.config,
@@ -121,6 +132,27 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
       clock: app.clock,
       ...(isPermitted(app.policy, "spawn-child-process")
         ? { spawnSource: spawnAudioSource, resolveHelper: resolveBundledHelperPath }
+        : {}),
+    }),
+    transcribePort: createTranscribePort({
+      clock: app.clock,
+      loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
+      ...(isPermitted(app.policy, "network-egress")
+        ? {
+            createProvider: createMuseProviderFromEnv,
+            openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
+          }
+        : {}),
+      ...(isPermitted(app.policy, "spawn-child-process")
+        ? {
+            spawnCapture: () => {
+              const helper = resolveBundledHelperPath(process.env);
+              if (helper.isErr()) {
+                return err(helper.error);
+              }
+              return spawnAudioSource({ helperPath: helper.value });
+            },
+          }
         : {}),
     }),
     replayPort: createReplayPort({
@@ -200,7 +232,7 @@ export async function runApp(
       startApp(app);
       let code: ExitCode;
       try {
-        code = await runCli(argv, cliDepsFrom(app, work.signal));
+        code = await runCli(argv, cliDepsFrom(app, work.signal, env));
       } catch (thrown: unknown) {
         const error = toAppError(thrown, "unhandled CLI failure");
         app.logger.error(formatError(error));

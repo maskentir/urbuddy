@@ -56,6 +56,95 @@ export interface CaptureSummary extends CaptureStats {
   readonly endReason: "completed" | "cancelled";
 }
 
+export interface ValidatedChunk {
+  readonly perChannel: number;
+  readonly gap: CaptureGap | undefined;
+}
+
+export interface ValidatedEnd {
+  readonly helper: HelperEnd;
+  readonly tailGap: CaptureGap | undefined;
+}
+
+export class SourceValidator {
+  private format: AudioFormat | undefined;
+  private audioCount = 0;
+  private expectedSample = 0;
+  private receivedFrames = 0;
+  private readonly gaps: CaptureGap[] = [];
+
+  get gapRanges(): readonly CaptureGap[] {
+    return this.gaps;
+  }
+
+  get audioFrames(): number {
+    return this.audioCount;
+  }
+
+  feedFormat(seq: number, format: AudioFormat): Result<AudioFormat, AppError> {
+    if (this.format !== undefined) {
+      return err(appError("VALIDATION_FAILED", "capture produced more than one audio format"));
+    }
+    if (seq !== 0) {
+      return err(appError("VALIDATION_FAILED", "capture format frame breaks sequence continuity"));
+    }
+    this.format = format;
+    return ok(format);
+  }
+
+  feedAudio(chunk: AudioChunk): Result<ValidatedChunk, AppError> {
+    const format = this.format;
+    if (format === undefined) {
+      return err(appError("VALIDATION_FAILED", "capture produced audio before its format"));
+    }
+    this.audioCount += 1;
+    if (chunk.seq !== this.audioCount) {
+      return err(appError("VALIDATION_FAILED", "capture audio sequence is not contiguous"));
+    }
+    let gap: CaptureGap | undefined;
+    if (chunk.startSample > this.expectedSample) {
+      gap = { fromSample: this.expectedSample, toSample: chunk.startSample };
+      this.gaps.push(gap);
+      this.expectedSample = chunk.startSample;
+    } else if (chunk.startSample < this.expectedSample) {
+      return err(appError("VALIDATION_FAILED", "capture audio overlaps already received samples"));
+    }
+    const perChannel = chunk.samples.length / format.channels;
+    if (!Number.isInteger(perChannel) || perChannel === 0) {
+      return err(appError("VALIDATION_FAILED", "capture audio frame does not match its format"));
+    }
+    this.receivedFrames += perChannel;
+    this.expectedSample += perChannel;
+    return ok({ perChannel, gap });
+  }
+
+  feedEnd(seq: number, end: HelperEnd): Result<ValidatedEnd, AppError> {
+    if (this.format === undefined) {
+      return err(appError("VALIDATION_FAILED", "capture ended without audio format"));
+    }
+    if (seq !== this.audioCount + 1) {
+      return err(appError("VALIDATION_FAILED", "capture end frame breaks sequence continuity"));
+    }
+    if (end.delivered !== this.audioCount) {
+      return err(appError("VALIDATION_FAILED", "helper delivery count contradicts received audio"));
+    }
+    let accounted = this.receivedFrames;
+    for (const gap of this.gaps) {
+      accounted += gap.toSample - gap.fromSample;
+    }
+    const residual = end.sourceFrames - accounted;
+    if (residual < 0) {
+      return err(appError("VALIDATION_FAILED", "helper source clock contradicts received audio"));
+    }
+    let tailGap: CaptureGap | undefined;
+    if (residual > 0) {
+      tailGap = { fromSample: this.expectedSample, toSample: this.expectedSample + residual };
+      this.gaps.push(tailGap);
+    }
+    return ok({ helper: end, tailGap });
+  }
+}
+
 export interface CaptureSessionInput {
   readonly source: CaptureSource;
   readonly signal: AbortSignal;
@@ -160,16 +249,13 @@ async function settleCapture(
 ): Promise<Result<CaptureSummary, AppError>> {
   const startedAt = input.clock.now();
   let lastStatsAt = startedAt;
+  const validator = new SourceValidator();
   let format: AudioFormat | undefined;
-  let audioCount = 0;
-  let expectedSample = 0;
   let receivedSamples = 0;
-  let receivedFrames = 0;
   let sumSq = 0;
   let peak = 0;
   let signalPresent = false;
   let helper: HelperEnd | undefined;
-  const gaps: CaptureGap[] = [];
   const emitStats = async (): Promise<void> => {
     const now = input.clock.now();
     if (now - lastStatsAt < STATS_INTERVAL_MS) {
@@ -181,10 +267,10 @@ async function settleCapture(
     }
     await awaitOutput(
       input.onStats({
-        receivedFrames: audioCount,
+        receivedFrames: validator.audioFrames,
         receivedSamples,
         droppedHelper: helper?.dropped ?? 0,
-        gaps: gaps.length,
+        gaps: validator.gapRanges.length,
         rms: receivedSamples === 0 ? 0 : Math.sqrt(sumSq / receivedSamples),
         peak,
         elapsedMs: now - startedAt,
@@ -197,44 +283,30 @@ async function settleCapture(
     for await (const item of input.source.items(signal)) {
       throwIfAborted(signal);
       if (item.type === "format") {
-        if (format !== undefined) {
-          throw appError("VALIDATION_FAILED", "capture produced more than one audio format");
+        const accepted = validator.feedFormat(item.seq, item.format);
+        if (accepted.isErr()) {
+          throw accepted.error;
         }
-        if (item.seq !== 0) {
-          throw appError("VALIDATION_FAILED", "capture format frame breaks sequence continuity");
-        }
-        format = item.format;
+        format = accepted.value;
         if (input.onFormat !== undefined) {
           await awaitOutput(input.onFormat(format), signal);
         }
         continue;
       }
-      if (format === undefined) {
-        throw appError("VALIDATION_FAILED", "capture produced audio before its format");
-      }
       if (item.type === "end") {
-        if (item.seq !== audioCount + 1) {
-          throw appError("VALIDATION_FAILED", "capture end frame breaks sequence continuity");
+        const accepted = validator.feedEnd(item.seq, item.end);
+        if (accepted.isErr()) {
+          throw accepted.error;
         }
-        helper = item.end;
+        helper = accepted.value.helper;
         if (item.end.reason === "cancelled" && !gracefulStop()) {
           throw appError("CANCELLED", "capture cancelled");
         }
         break;
       }
-      audioCount += 1;
-      if (item.chunk.seq !== audioCount) {
-        throw appError("VALIDATION_FAILED", "capture audio sequence is not contiguous");
-      }
-      if (item.chunk.startSample > expectedSample) {
-        gaps.push({ fromSample: expectedSample, toSample: item.chunk.startSample });
-        expectedSample = item.chunk.startSample;
-      } else if (item.chunk.startSample < expectedSample) {
-        throw appError("VALIDATION_FAILED", "capture audio overlaps already received samples");
-      }
-      const perChannel = item.chunk.samples.length / format.channels;
-      if (!Number.isInteger(perChannel) || perChannel === 0) {
-        throw appError("VALIDATION_FAILED", "capture audio frame does not match its format");
+      const accepted = validator.feedAudio(item.chunk);
+      if (accepted.isErr()) {
+        throw accepted.error;
       }
       for (const value of item.chunk.samples) {
         const magnitude = Math.abs(value);
@@ -247,8 +319,6 @@ async function settleCapture(
         sumSq += value * value;
       }
       receivedSamples += item.chunk.samples.length;
-      receivedFrames += perChannel;
-      expectedSample += perChannel;
       await emitStats();
     }
     throwIfAborted(signal);
@@ -261,27 +331,14 @@ async function settleCapture(
   if (helper === undefined) {
     return err(appError("VALIDATION_FAILED", "capture ended without helper acknowledgement"));
   }
-  if (helper.delivered !== audioCount) {
-    return err(appError("VALIDATION_FAILED", "helper delivery count contradicts received audio"));
-  }
-  let accounted = receivedFrames;
-  for (const gap of gaps) {
-    accounted += gap.toSample - gap.fromSample;
-  }
-  const residual = helper.sourceFrames - accounted;
-  if (residual < 0) {
-    return err(appError("VALIDATION_FAILED", "helper source clock contradicts received audio"));
-  }
-  if (residual > 0) {
-    gaps.push({ fromSample: expectedSample, toSample: expectedSample + residual });
-  }
+  const gapRanges = validator.gapRanges;
   return ok({
     format,
-    receivedFrames: audioCount,
+    receivedFrames: validator.audioFrames,
     receivedSamples,
     droppedHelper: helper.dropped,
-    gaps: gaps.length,
-    gapRanges: gaps,
+    gaps: gapRanges.length,
+    gapRanges,
     helperCaptured: helper.captured,
     helperDelivered: helper.delivered,
     rms: receivedSamples === 0 ? 0 : Math.sqrt(sumSq / receivedSamples),

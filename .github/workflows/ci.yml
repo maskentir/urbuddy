@@ -27,6 +27,13 @@ jobs:
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --json
       - run: node dist/bootstrap/main.js replay fixtures/replay/basic.ndjson --persist --allow-native --operation-id ci-smoke --data-root /tmp/urbuddy-ci-data
+      - run: pnpm smoke:transcribe
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: smoke-transcribe-evidence
+          path: evaluation/speech/results/
+          retention-days: 14
       - run: pnpm audit --audit-level high
 
   native-verify:

@@ -1,6 +1,6 @@
 import { match } from "ts-pattern";
 
-export const COMMAND_NAMES = ["doctor", "version", "replay", "capture"] as const;
+export const COMMAND_NAMES = ["doctor", "version", "replay", "capture", "transcribe"] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
@@ -13,6 +13,11 @@ export function commandHelp(name: CommandName): string {
       "capture",
       () =>
         "capture [--duration s]  capture system-wide macOS system audio (requires --allow-child)",
+    )
+    .with(
+      "transcribe",
+      () =>
+        "transcribe [--file wav]  stream speech recognition via Muse (requires --allow-egress; live also --allow-child)",
     )
     .exhaustive();
 }

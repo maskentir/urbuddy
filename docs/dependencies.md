@@ -21,6 +21,7 @@ OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 | strip-ansi     | 7.2.0   | MIT        | >=12            | `src/platform/output.ts` sanitize                                | platform            |
 | ts-pattern     | 5.9.2   | MIT        | none            | exhaustive command + exit-code dispatch                          | kernel/presentation |
 | zod            | 4.6.7   | MIT        | none            | config, resources, log-level schemas                             | kernel/modules      |
+| ws             | 8.23.0  | MIT        | >=10            | `src/adapters/speech/` WebSocket client + local test server      | adapters            |
 
 ## Development
 
@@ -47,15 +48,17 @@ OpenTelemetry, xstate, …) are compat-checked but NOT installed.
 | @commitlint/cli                 | 21.2.4  | MIT        | >=22.12                 | conventional-commit enforcement on commit-msg         | tooling      |
 | @commitlint/config-conventional | 21.2.4  | MIT        | n/a (config)            | commit message ruleset                                | tooling      |
 | ink-testing-library             | 4.0.0   | MIT        | >=18                    | real Ink component render assertions                  | tests        |
+| @types/ws                       | 8.18.1  | MIT        | n/a (types)             | `ws` declarations                                     | adapters     |
 
 ## Deliberately NOT adopted
 
-| package                        | reason                                                                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| typescript@7.0.2               | Latest line, but violates typescript-eslint peer (`<6.1.0`). Pinned to 5.9.3 until the peer range moves.                            |
-| eslint-plugin-neverthrow@1.1.4 | Stale (2022-05-01, predates flat config); unverified under ESLint v9/10. Result discipline via tsc + tests instead.                 |
-| string-width (direct)          | Ink 8 wants `^8.3.0`; a direct v9 would nest alongside. No direct consumer yet.                                                     |
-| custom logging facade          | Replaced by pino 10.4.0 transport + policy wrapper (injected clock, name-based redaction, live correlation). No parallel framework. |
-| xstate, deferred libs          | Conditional/deferred: no consumer yet.                                                                                              |
-| vite, react-devtools-core      | Peer-resolved transitively at install; not direct dependencies.                                                                     |
-| vite-tsconfig-paths@6.1.1      | Tried for test-time alias resolution; removed after Vitest's native `resolve.tsconfigPaths` proved sufficient. Fewer deps win.      |
+| package                        | reason                                                                                                                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| typescript@7.0.2               | Latest line, but violates typescript-eslint peer (`<6.1.0`). Pinned to 5.9.3 until the peer range moves.                                                                                       |
+| eslint-plugin-neverthrow@1.1.4 | Stale (2022-05-01, predates flat config); unverified under ESLint v9/10. Result discipline via tsc + tests instead.                                                                            |
+| string-width (direct)          | Ink 8 wants `^8.3.0`; a direct v9 would nest alongside. No direct consumer yet.                                                                                                                |
+| custom logging facade          | Replaced by pino 10.4.0 transport + policy wrapper (injected clock, name-based redaction, live correlation). No parallel framework.                                                            |
+| xstate, deferred libs          | Conditional/deferred: no consumer yet.                                                                                                                                                         |
+| vite, react-devtools-core      | Peer-resolved transitively at install; not direct dependencies.                                                                                                                                |
+| vite-tsconfig-paths@6.1.1      | Tried for test-time alias resolution; removed after Vitest's native `resolve.tsconfigPaths` proved sufficient. Fewer deps win.                                                                 |
+| native Node WebSocket client   | Evaluated for the Muse adapter; rejected: no inbound payload bound, weak termination control for lifecycle tests, and no server for deterministic local protocol tests. `ws` covers all three. |

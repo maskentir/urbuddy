@@ -3,3 +3,5 @@ dist
 coverage
 *.tsbuildinfo
 native/audio-capture-macos/bin/
+evaluation/speech/corpus/
+evaluation/speech/results/
