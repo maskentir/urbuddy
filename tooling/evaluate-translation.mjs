@@ -16,6 +16,7 @@ import { TranslationScheduler } from "../dist/modules/language/translation.js";
 const { values: options } = parseArgs({
   options: {
     "env-file": { type: "string" },
+    compare: { type: "string" },
     live: { type: "boolean" },
     "allow-egress": { type: "boolean" },
   },
@@ -24,20 +25,47 @@ if (Boolean(options.live) !== Boolean(options["allow-egress"])) {
   throw new Error("Live evaluation requires both --live and --allow-egress");
 }
 
-const corpus = JSON.parse(
+const comparison = options.compare !== undefined;
+if (comparison && options.compare !== "gpt-6-luna" && options.compare !== "gpt-6.1-terra") {
+  throw new Error("Comparison model must be gpt-6-luna or gpt-6.1-terra");
+}
+const regression = JSON.parse(
   readFileSync(
     new URL("../evaluation/language/corpus/synthetic-001.json", import.meta.url),
     "utf8",
   ),
 );
-const maximumInvocations = 16;
-const qualificationModel = "gpt-6-luna";
-const plannedInvocations = corpus.cases.reduce((total, item) => total + item.context.length + 1, 0);
-if (options.live && (corpus.version !== 3 || plannedInvocations !== maximumInvocations)) {
-  throw new Error("Live qualification requires the authorized v3 corpus");
+const sets = [{ name: "regression-v3", corpus: regression, invocations: 16 }];
+const prompt = comparison
+  ? JSON.parse(
+      readFileSync(
+        new URL("../evaluation/language/prompts/urbuddy-translation-v3.json", import.meta.url),
+        "utf8",
+      ),
+    )
+  : undefined;
+if (comparison) {
+  const holdout = JSON.parse(
+    readFileSync(
+      new URL("../evaluation/language/corpus/holdout-001.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  if (prompt.version !== "urbuddy-translation-v3" || holdout.version !== 1) {
+    throw new Error("Comparison requires the frozen v3 prompt and v1 holdout");
+  }
+  sets.push({ name: "holdout-v1", corpus: holdout, invocations: 7 });
 }
-if (plannedInvocations > maximumInvocations) {
-  throw new Error("Corpus exceeds the evaluation invocation limit");
+const maximumInvocations = sets.reduce((total, set) => total + set.invocations, 0);
+const qualificationModel = options.compare ?? "gpt-6-luna";
+if (
+  regression.version !== 3 ||
+  sets.some(
+    ({ corpus, invocations }) =>
+      corpus.cases.reduce((total, item) => total + item.context.length + 1, 0) !== invocations,
+  )
+) {
+  throw new Error("Selected corpus does not match the frozen invocation bounds");
 }
 
 async function emit(value, signal) {
@@ -72,7 +100,16 @@ try {
     process.exit(3);
   }
   let invocationCount = 0;
-  for (const item of corpus.cases) {
+  for (const { item, corpusVersion, evaluationSet } of sets.flatMap(({ name, corpus }) =>
+    corpus.cases.map((item) => ({ item, corpusVersion: corpus.version, evaluationSet: name })),
+  )) {
+    const evidence = {
+      caseId: item.id,
+      corpusVersion,
+      ...(comparison
+        ? { evaluationSet, requestedModel: qualificationModel, promptVersion: prompt.version }
+        : {}),
+    };
     if (controller.signal.aborted) {
       break;
     }
@@ -114,17 +151,31 @@ try {
         providerId: backend.providerId,
         modelId: backend.modelId,
         translate: async (request) => {
+          const prepared =
+            prompt === undefined
+              ? request
+              : {
+                  ...request,
+                  messages: request.messages.map((message) =>
+                    message.role === "system"
+                      ? {
+                          ...message,
+                          content: `${prompt.system} Prompt version: ${prompt.version}.`,
+                        }
+                      : message,
+                  ),
+                };
           if (invocationCount >= maximumInvocations) {
             stopCase("invocation budget exhausted");
             return err(appError("CONFIG_INVALID", "evaluation invocation budget exhausted"));
           }
-          if (Buffer.byteLength(JSON.stringify(request.messages)) > 4_096) {
+          if (Buffer.byteLength(JSON.stringify(prepared.messages)) > 4_096) {
             stopCase("input bound exceeded");
             return err(appError("CONFIG_INVALID", "evaluation input bound exceeded"));
           }
           invocationCount += 1;
           try {
-            const result = await backend.translate(request);
+            const result = await backend.translate(prepared);
             if (result.isErr() && result.error.code !== "VALIDATION_FAILED") {
               const { code, details } = result.error;
               stopCase(
@@ -144,7 +195,7 @@ try {
         if (!isCurrent()) {
           return false;
         }
-        await emit({ caseId: item.id, corpusVersion: corpus.version, ...event }, controller.signal);
+        await emit({ ...event, ...evidence }, controller.signal);
         return true;
       },
     });
@@ -158,7 +209,7 @@ try {
       });
     }
     const summary = await scheduler.finish();
-    await emit({ type: "translation-complete", caseId: item.id, ...summary }, controller.signal);
+    await emit({ type: "translation-complete", ...summary, ...evidence }, controller.signal);
     coverageFailed ||= summary.failed;
     if (stopReason !== undefined) {
       console.error(`qualification stopped at ${item.id}: ${stopReason}`);

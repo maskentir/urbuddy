@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "holdout-permission",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "Dana grants you permission: you may submit the form after she signs it.",
+      "context": [],
+      "reference": "Dana memberimu izin: kamu boleh mengirim formulir itu setelah ia menandatanganinya.",
+      "intendedMeaning": "Dana authorizes the addressee to submit only after Dana signs the form.",
+      "incorrectInterpretation": "Submission is only predicted, permitted before signature, or Dana must submit it."
+    },
+    {
+      "id": "holdout-possibility",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "The delivery estimate is uncertain. The package may arrive before noon.",
+      "context": [],
+      "reference": "Perkiraan waktu pengirimannya belum pasti. Paket itu mungkin tiba sebelum tengah hari.",
+      "intendedMeaning": "Pre-noon arrival is a possibility rather than a guaranteed or permitted action.",
+      "incorrectInterpretation": "Arrival is guaranteed, authorization is granted, or the arrival estimate includes exactly noon."
+    },
+    {
+      "id": "holdout-referent",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "Please bring it to me.",
+      "context": ["Rina left the blue notebook on the shelf."],
+      "reference": "Tolong bawakan buku catatan biru itu kepadaku.",
+      "intendedMeaning": "The addressee is asked to bring the blue notebook to the speaker.",
+      "incorrectInterpretation": "Bring an unspecified object, bring it to Rina, or ask Rina to fetch it."
+    },
+    {
+      "id": "holdout-boundary",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "If Arif checks in by Friday, he can join the trial, including if he checks in on Friday.",
+      "context": [],
+      "reference": "Jika Arif melakukan check-in paling lambat hari Jumat, ia boleh mengikuti uji coba, termasuk jika ia melakukan check-in pada hari Jumat.",
+      "intendedMeaning": "Arif can join the trial if he checks in no later than Friday, including Friday itself.",
+      "incorrectInterpretation": "Another actor must check in, joining is mandatory, or Friday itself is excluded."
+    },
+    {
+      "id": "holdout-ambiguity",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "I watched the man with the telescope.",
+      "context": [],
+      "reference": "Aku mengamati pria itu dengan teleskop.",
+      "intendedMeaning": "The telescope could be the speaker's instrument or something the man had. Preserve both readings.",
+      "incorrectInterpretation": "State that either person definitely used or possessed the telescope."
+    },
+    {
+      "id": "holdout-ja-ko",
+      "sourceLanguage": "ja",
+      "targetLanguage": "ko",
+      "source": "明日は駅で会いましょう。",
+      "context": [],
+      "reference": "내일 역에서 만나요.",
+      "intendedMeaning": "Propose meeting at the station tomorrow.",
+      "incorrectInterpretation": "Change the location or day, or report that the meeting already occurred."
+    }
+  ]
+}

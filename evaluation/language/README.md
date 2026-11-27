@@ -130,3 +130,5 @@ A continuing utterance with no pause can still yield zero previews. Assess
 whether useful pauses occur before changing admission. Use final-only
 evidence for initial semantic qualification and withhold a live preview
 performance claim.
+
+See the [controlled comparison and snapshot experiment](./readiness.md) for the current offline readiness work.
