@@ -126,7 +126,10 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   discarded, and every epoch boundary emits an explicit
   discontinuity. End-of-input intent is recorded before waiting for
   transport readiness, so a loss after input has ended fails
-  finalization instead of opening a replacement connection.
+  finalization instead of opening a replacement connection —
+  including when the loss surfaces while a reconnect is still
+  backing off. Readiness errors propagate as explicit failures;
+  end-of-input never reports success without a live connection.
   Exactly-once and seamless recovery are not claimed. Unresolved
   turns at normal closure are reported as uncertain coverage,
   never promoted to final.
@@ -151,14 +154,18 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
   cannot exceed twice the source rate.
 - Credentials arrive only through the `MODEL_API_KEY` environment
   variable, never through arguments, URLs, logs, or fixtures.
-  Production connections are restricted to `wss://api.meta.ai`;
-  loopback `ws://127.0.0.1`/`localhost` is accepted only through
-  the explicit test-only `testLoopbackEndpoint` dependency, never
-  through configuration. There is no endpoint override in
-  production wiring. Live system audio additionally requires
-  child-process authorization, and the CLI discloses cloud
-  transmission on stderr in both text and JSON modes. Transcripts
-  and audio stay ephemeral; no persistence is introduced.
+  Production connections are restricted to `wss://api.meta.ai`.
+  The compiled CLI can address a loopback WebSocket server only
+  through `URBUDDY_TRANSCRIBE_ENDPOINT`, which rejects everything
+  but loopback hosts before any connection exists; this override
+  exists solely so the canonical smoke exercises the real CLI
+  entrypoint without production egress, and it cannot exfiltrate
+  audio to a foreign host. Unit tests use the explicit test-only
+  `testLoopbackEndpoint` dependency instead. Live system audio
+  additionally requires child-process authorization, and the CLI
+  discloses cloud transmission on stderr in both text and JSON
+  modes. Transcripts and audio stay ephemeral; no persistence is
+  introduced.
 - Speaker attribution keeps the most recent label per turn as an
   approximation of the documented span semantics (the label covers
   the span since the previous speech event); multi-label turn
@@ -169,9 +176,12 @@ Source: Meta Model API speech-to-text and Voice API reference pages.
 - `urbuddy transcribe --file <wav> --allow-egress` paces WAV input
   as a live stream through the same adapter as live capture.
 - Deterministic acceptance runs against a local `ws` server; no CI
-  job makes paid calls. Real provider verification is a separate
-  owner-authorized step (see the PR for the exact live-test command
-  and estimate) and is not claimed by this slice.
+  job makes paid calls. `pnpm smoke:transcribe` (`tooling/smoke-transcribe.mjs`)
+  exercises the compiled CLI end to end against a local server and
+  preserves full evidence per run, and runs in hosted CI. Real
+  provider verification is a separate owner-authorized step (see
+  the PR for the exact live-test command and estimate) and is not
+  claimed by this slice.
 - Session rotation before the 60-minute provider limit, speaker
   reconciliation across epochs, and production latency measurement
   remain unqualified. FSRS, translation, and memory integrations

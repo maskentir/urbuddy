@@ -154,8 +154,9 @@ export class FakeSpeechSession implements SpeechSession {
     return ok(undefined);
   }
 
-  async endInput(): Promise<void> {
+  async endInput(): Promise<Result<void, AppError>> {
     this.endInputSeen = true;
+    return ok(undefined);
   }
 
   async terminate(): Promise<Result<void, AppError>> {
@@ -819,6 +820,56 @@ describe("termination and reconnect ownership", () => {
     expect(outcome.isErr()).toBe(true);
     expect(server.connections).toBe(2);
   });
+
+  it("fails instead of opening a replacement connection when input ends during backoff", async () => {
+    server = new SpeechTestServer(({ socket }) => {
+      acknowledge(socket);
+    });
+    let backoffStarted!: () => void;
+    const backoffEntered = new Promise<void>((resolve) => {
+      backoffStarted = resolve;
+    });
+    let releaseBackoff!: () => void;
+    const backoffReleased = new Promise<void>((resolve) => {
+      releaseBackoff = resolve;
+    });
+    const provider = createMuseProvider({
+      apiKey: "test-key",
+      testLoopbackEndpoint: await server.url(),
+      sleep: () => {
+        backoffStarted();
+        return backoffReleased;
+      },
+    });
+    const opened = await provider.openSession({
+      mode: "endpointing",
+      encoding: "PCM_24KHZ",
+      keywords: [],
+      signal: new AbortController().signal,
+    });
+    expect(opened.isOk()).toBe(true);
+    if (opened.isErr()) {
+      return;
+    }
+    const session = opened.value;
+    server.sockets[0]?.close(1011);
+    await backoffEntered;
+    const pending = session.endInput();
+    const early = await Promise.race([
+      pending.then(() => "settled" as const),
+      new Promise((resolve) => setTimeout(() => resolve("waiting" as const), 200)),
+    ]);
+    expect(early).toBe("waiting");
+    releaseBackoff();
+    const ended = await pending;
+    expect(ended.isErr()).toBe(true);
+    if (ended.isErr()) {
+      expect(ended.error.code).toBe("RESOURCE_ACQUIRE_FAILED");
+      expect(ended.error.message).toContain("before results drained");
+    }
+    expect(server.connections).toBe(1);
+    await session.terminate();
+  }, 15_000);
 
   it("fails finalization when the connection drops after end-of-input", async () => {
     server = new SpeechTestServer(({ socket }) => {

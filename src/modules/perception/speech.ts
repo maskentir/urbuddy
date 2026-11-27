@@ -34,7 +34,7 @@ export interface SpeechSession {
   readonly providerSessionId: string | undefined;
   events(): AsyncIterable<SpeechProviderEvent>;
   sendAudio(pcm: Buffer): Promise<Result<void, AppError>>;
-  endInput(): Promise<void>;
+  endInput(): Promise<Result<void, AppError>>;
   terminate(): Promise<Result<void, AppError>>;
 }
 
@@ -492,7 +492,10 @@ export async function runTranscription(
     if (durationTimer !== undefined) {
       clearTimeout(durationTimer);
     }
-    await session.endInput();
+    const inputEnded = await session.endInput();
+    if (inputEnded.isErr()) {
+      throw inputEnded.error;
+    }
     const operationRejected = new Promise<never>((_resolve, reject) => {
       if (operation.signal.aborted) {
         reject(appError("CANCELLED", "transcription cancelled"));

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openWavSource } from "@adapters/audio/wav-source";
-import { createMuseProvider } from "@adapters/speech/muse";
+import { createMuseProvider, resolveMuseEndpoint } from "@adapters/speech/muse";
 import type { CaptureSource, SourceItem } from "@modules/perception/audio";
 import { runTranscription, type TranscriptEvent } from "@modules/perception/speech";
 import { createTranscribePort } from "@presentation/transcribe";
@@ -386,6 +386,45 @@ describe("Muse transport (local server)", () => {
     });
     expect(outcome.isErr()).toBe(true);
     expect(server.connections).toBe(0);
+  });
+});
+
+describe("resolveMuseEndpoint", () => {
+  it("uses the production endpoint by default", () => {
+    for (const raw of [undefined, "", "   "] as const) {
+      const resolved = resolveMuseEndpoint(raw);
+      expect(resolved.isOk()).toBe(true);
+      if (resolved.isOk()) {
+        expect(resolved.value).toBe("wss://api.meta.ai/v1/asr/realtime");
+      }
+    }
+  });
+
+  it("accepts loopback overrides for local smoke servers", () => {
+    const loopback = resolveMuseEndpoint("ws://127.0.0.1:18923");
+    expect(loopback.isOk()).toBe(true);
+    const local = resolveMuseEndpoint("ws://localhost:18923");
+    expect(local.isOk()).toBe(true);
+    const secure = resolveMuseEndpoint("wss://127.0.0.1:1");
+    expect(secure.isOk()).toBe(true);
+    if (secure.isOk()) {
+      expect(secure.value).toContain("127.0.0.1");
+    }
+  });
+
+  it("rejects remote and malformed endpoints before any connection", () => {
+    for (const raw of [
+      "wss://evil.example.com/asr",
+      "ws://evil.example.com/asr",
+      "https://api.meta.ai/v1/asr/realtime",
+      "::not-a-url::",
+    ]) {
+      const resolved = resolveMuseEndpoint(raw);
+      expect(resolved.isErr()).toBe(true);
+      if (resolved.isErr()) {
+        expect(resolved.error.code).toBe("VALIDATION_FAILED");
+      }
+    }
   });
 });
 

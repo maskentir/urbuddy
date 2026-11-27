@@ -148,14 +148,15 @@ security ceiling → validated session configuration.
 A profile can only restrict: no flag, variable, or profile grants a
 permission the ceiling denies. Forbidden grants fail fast.
 
-| Environment variable   | CLI override                                                   |
-| ---------------------- | -------------------------------------------------------------- |
-| `URBUDDY_PROFILE`      | `--profile`                                                    |
-| `URBUDDY_LOG_LEVEL`    | `--log-level`                                                  |
-| `URBUDDY_DATA_ROOT`    | `--data-root`                                                  |
-| `URBUDDY_ALLOW_EGRESS` | `--allow-egress`                                               |
-| `URBUDDY_ALLOW_CHILD`  | `--allow-child`                                                |
-| `URBUDDY_AUDIO_HELPER` | (no flag; absolute path override for the native helper binary) |
+| Environment variable          | CLI override                                                                                             |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `URBUDDY_PROFILE`             | `--profile`                                                                                              |
+| `URBUDDY_LOG_LEVEL`           | `--log-level`                                                                                            |
+| `URBUDDY_DATA_ROOT`           | `--data-root`                                                                                            |
+| `URBUDDY_ALLOW_EGRESS`        | `--allow-egress`                                                                                         |
+| `URBUDDY_ALLOW_CHILD`         | `--allow-child`                                                                                          |
+| `URBUDDY_AUDIO_HELPER`        | (no flag; absolute path override for the native helper binary)                                           |
+| `URBUDDY_TRANSCRIBE_ENDPOINT` | (no flag; loopback-only WebSocket URL for local smoke/test servers; production uses `wss://api.meta.ai`) |
 
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit

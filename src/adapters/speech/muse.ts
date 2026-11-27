@@ -97,6 +97,19 @@ function classifyClose(code: number): "normal" | "protocol" | "transient" | "rat
   return "transient";
 }
 
+export const MUSE_TRANSCRIBE_ENDPOINT_ENV = "URBUDDY_TRANSCRIBE_ENDPOINT";
+
+export function resolveMuseEndpoint(raw: string | undefined): Result<string, AppError> {
+  if (raw === undefined || raw.trim() === "") {
+    return ok(MUSE_REALTIME_URL);
+  }
+  const validated = validateEndpoint(raw.trim());
+  if (validated.isErr()) {
+    return err(validated.error);
+  }
+  return ok(validated.value.toString());
+}
+
 export interface MuseProviderOptions {
   readonly apiKey: string;
   readonly testLoopbackEndpoint?: string;
@@ -152,8 +165,6 @@ class MuseSession implements SpeechSession {
   private drainDeadline: ReturnType<typeof setTimeout> | undefined;
   private readonly shutdown: AbortController;
   private readonly combined: AbortSignal;
-  private settled: Promise<void>;
-  private resolveSettled: (() => void) | undefined;
 
   constructor(
     private readonly options: MuseProviderOptions & {
@@ -166,9 +177,6 @@ class MuseSession implements SpeechSession {
     this.encoding = encoding;
     this.shutdown = new AbortController();
     this.combined = AbortSignal.any([this.options.signal, this.shutdown.signal]);
-    this.settled = new Promise<void>((resolve) => {
-      this.resolveSettled = resolve;
-    });
   }
 
   async start(): Promise<Result<void, AppError>> {
@@ -215,7 +223,6 @@ class MuseSession implements SpeechSession {
     this.terminated = true;
     this.shutdown.abort();
     this.finished = true;
-    this.resolveSettled?.();
     this.wake();
   }
 
@@ -255,7 +262,6 @@ class MuseSession implements SpeechSession {
     this.terminated = true;
     this.shutdown.abort();
     this.finished = true;
-    this.resolveSettled?.();
     this.wake();
   }
 
@@ -574,6 +580,12 @@ class MuseSession implements SpeechSession {
       );
       return;
     }
+    if (this.ending) {
+      this.fail(
+        appError("RESOURCE_ACQUIRE_FAILED", "speech connection closed before results drained"),
+      );
+      return;
+    }
     const sentThisEpoch = this.sentBytes - this.sentAtEpochStart;
     const sentMs = Math.round((sentThisEpoch / bytesPerSecond(this.encoding)) * 1000);
     const uncertainMs = Math.max(0, sentMs - this.lastProcessedMs);
@@ -614,9 +626,6 @@ class MuseSession implements SpeechSession {
             }
           });
         }),
-        this.settled.then(() => {
-          throw appError("CANCELLED", "speech connection cancelled");
-        }),
         aborted,
       ]);
       if (timedOut) {
@@ -653,11 +662,9 @@ class MuseSession implements SpeechSession {
       if (remaining <= 0) {
         return err(appError("RESOURCE_ACQUIRE_FAILED", "speech connection is not open"));
       }
-      await Promise.race([
-        this.epochGate,
-        this.settled,
-        this.rejectedAfter(remaining, this.combined),
-      ]).catch(() => undefined);
+      await Promise.race([this.epochGate, this.rejectedAfter(remaining, this.combined)]).catch(
+        () => undefined,
+      );
     }
   }
 
@@ -705,7 +712,7 @@ class MuseSession implements SpeechSession {
         return err(appError("INTERNAL", "speech outbound buffering exceeded its bound"));
       }
       const sleep = this.options.sleep ?? defaultSleep;
-      await Promise.race([sleep(10, this.combined), this.settled]).catch(() => undefined);
+      await sleep(10, this.combined).catch(() => undefined);
       const current = await this.waitForActive();
       if (current.isErr()) {
         return err(current.error);
@@ -720,19 +727,22 @@ class MuseSession implements SpeechSession {
     return ok(undefined);
   }
 
-  async endInput(): Promise<void> {
+  async endInput(): Promise<Result<void, AppError>> {
     this.ending = true;
     const ready = await this.waitForActive();
     if (ready.isErr()) {
-      return;
+      return err(ready.error);
     }
     const socket = ready.value;
     this.armDrainDeadline(socket);
     try {
       socket.send(JSON.stringify({ type: "endStream" }));
     } catch {
-      this.fail(appError("INTERNAL", "speech end-of-input send failed"));
+      const failure = appError("INTERNAL", "speech end-of-input send failed");
+      this.fail(failure);
+      return err(failure);
     }
+    return ok(undefined);
   }
 
   private armDrainDeadline(socket: WebSocket): void {

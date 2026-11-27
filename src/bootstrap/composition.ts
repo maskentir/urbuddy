@@ -3,7 +3,11 @@ import { join } from "node:path";
 
 import { resolveBundledHelperPath, spawnAudioSource } from "@adapters/audio/capture-source";
 import { openWavSource } from "@adapters/audio/wav-source";
-import { createMuseProvider } from "@adapters/speech/muse";
+import {
+  createMuseProvider,
+  MUSE_TRANSCRIBE_ENDPOINT_ENV,
+  resolveMuseEndpoint,
+} from "@adapters/speech/muse";
 import { systemClock, type Clock } from "@kernel/clock";
 import { runWithCorrelationId } from "@kernel/correlation";
 import { appError, formatError, toAppError, type AppError } from "@kernel/errors";
@@ -140,7 +144,25 @@ function cliDepsFrom(app: AppContainer, signal: AbortSignal): CliDeps {
                   ),
                 );
               }
-              return ok(createMuseProvider({ apiKey }));
+              const endpoint = resolveMuseEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]);
+              if (endpoint.isErr()) {
+                return err(endpoint.error);
+              }
+              let loopbackEndpoint: string | undefined;
+              try {
+                loopbackEndpoint =
+                  new URL(endpoint.value).host === "api.meta.ai" ? undefined : endpoint.value;
+              } catch {
+                return err(appError("VALIDATION_FAILED", "speech provider endpoint is invalid"));
+              }
+              return ok(
+                createMuseProvider({
+                  apiKey,
+                  ...(loopbackEndpoint === undefined
+                    ? {}
+                    : { testLoopbackEndpoint: loopbackEndpoint }),
+                }),
+              );
             },
             openWav: async (path: string) => openWavSource(path, { pacing: "realtime" }),
           }

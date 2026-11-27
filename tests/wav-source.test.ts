@@ -77,8 +77,9 @@ export class FakeSpeechSession implements SpeechSession {
     return ok(undefined);
   }
 
-  async endInput(): Promise<void> {
+  async endInput(): Promise<Result<void, AppError>> {
     this.endInputSeen = true;
+    return ok(undefined);
   }
 
   async terminate(): Promise<Result<void, AppError>> {
