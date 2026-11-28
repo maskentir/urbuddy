@@ -1,0 +1,69 @@
+{"tClockMs":0,"kind":"intel-participants-announced","detail":"participants-announced"}
+{"tClockMs":6400,"kind":"transcript-partial","detail":"epoch-0-turn-1 r1: Nightly analytics exports are slow"}
+{"tClockMs":6400,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":7700,"kind":"transcript-partial","detail":"epoch-0-turn-1 r2: Nightly analytics exports are slow and search results look stale."}
+{"tClockMs":9000,"kind":"transcript-final","detail":"epoch-0-turn-1 r3: Nightly analytics exports are slow and search results look stale."}
+{"tClockMs":19400,"kind":"transcript-partial","detail":"epoch-0-turn-2 r1: Export pages keep timing out"}
+{"tClockMs":19400,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":20800,"kind":"transcript-partial","detail":"epoch-0-turn-2 r2: Export pages keep timing out after the reporting batch."}
+{"tClockMs":22200,"kind":"transcript-final","detail":"epoch-0-turn-2 r3: Export pages keep timing out after the reporting batch."}
+{"tClockMs":31600,"kind":"transcript-partial","detail":"epoch-0-turn-3 r1: Sorry, just joined. Is the export"}
+{"tClockMs":31600,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":33200,"kind":"transcript-partial","detail":"epoch-0-turn-3 r2: Sorry, just joined. Is the export delayed or is the index stale?"}
+{"tClockMs":34700,"kind":"transcript-final","detail":"epoch-0-turn-3 r3: Sorry, just joined. Is the export delayed or is the index stale?"}
+{"tClockMs":43800,"kind":"transcript-partial","detail":"epoch-0-turn-4 r1: The export cursor marks our position. We"}
+{"tClockMs":43800,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":45500,"kind":"transcript-partial","detail":"epoch-0-turn-4 r2: The export cursor marks our position. We can resume from the last stored cursor."}
+{"tClockMs":47200,"kind":"transcript-final","detail":"epoch-0-turn-4 r3: The export cursor marks our position. We can resume from the last stored cursor."}
+{"tClockMs":47200,"kind":"translation-fired","detail":"cursor: Kursor ekspor menandai posisi kita. Kita bisa lanjut dari kursor terakhir yang t"}
+{"tClockMs":48000,"kind":"intel-recap-available","detail":"recap-available"}
+{"tClockMs":59600,"kind":"transcript-partial","detail":"epoch-0-turn-5 r1: The API is throttling us. We"}
+{"tClockMs":59600,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":61100,"kind":"transcript-partial","detail":"epoch-0-turn-5 r2: The API is throttling us. We back off with jitter before retrying."}
+{"tClockMs":62600,"kind":"transcript-final","detail":"epoch-0-turn-5 r3: The API is throttling us. We back off with jitter before retrying."}
+{"tClockMs":72000,"kind":"translation-fired","detail":"throttle: API membatasi laju kita. Kita menunggu acak sebelum mencoba lagi."}
+{"tClockMs":79900,"kind":"transcript-partial","detail":"epoch-0-turn-6 r1: The cursor is at offset nine."}
+{"tClockMs":79900,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":81700,"kind":"transcript-partial","detail":"epoch-0-turn-6 r2: The cursor is at offset nine. No, the cursor expired, run a fresh probe."}
+{"tClockMs":83500,"kind":"transcript-final","detail":"epoch-0-turn-6 r3: The cursor is at offset nine. No, the cursor expired, run a fresh probe."}
+{"tClockMs":83500,"kind":"translation-fired","detail":"cursor-fix: Kursor di offset sembilan. Bukan, kursor kedaluwarsa, jalankan probe baru."}
+{"tClockMs":95000,"kind":"intel-question-asked","detail":"question-asked"}
+{"tClockMs":95000,"kind":"intel-suggestion-pending","detail":"suggestion-pending"}
+{"tClockMs":95000,"kind":"intel-suggestion-ready","detail":"suggestion-ready"}
+{"tClockMs":96100,"kind":"transcript-partial","detail":"epoch-0-turn-7 r1: Jonas or Priya, can we"}
+{"tClockMs":96100,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":97100,"kind":"transcript-partial","detail":"epoch-0-turn-7 r2: Jonas or Priya, can we run the rebuild tonight?"}
+{"tClockMs":98100,"kind":"transcript-final","detail":"epoch-0-turn-7 r3: Jonas or Priya, can we run the rebuild tonight?"}
+{"tClockMs":108000,"kind":"intel-assumption-changed","detail":"assumption-changed"}
+{"tClockMs":109100,"kind":"transcript-partial","detail":"epoch-0-turn-8 r1: Priya, please confirm the disk"}
+{"tClockMs":109100,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":110200,"kind":"transcript-partial","detail":"epoch-0-turn-8 r2: Priya, please confirm the disk and the throttle first."}
+{"tClockMs":111300,"kind":"transcript-final","detail":"epoch-0-turn-8 r3: Priya, please confirm the disk and the throttle first."}
+{"tClockMs":120000,"kind":"intel-question-asked","detail":"question-asked"}
+{"tClockMs":120000,"kind":"intel-suggestion-pending","detail":"suggestion-pending"}
+{"tClockMs":121300,"kind":"transcript-partial","detail":"epoch-0-turn-9 r1: Priya, what do you recommend if the"}
+{"tClockMs":121300,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":122500,"kind":"transcript-partial","detail":"epoch-0-turn-9 r2: Priya, what do you recommend if the disk and the throttle look fine?"}
+{"tClockMs":123800,"kind":"transcript-final","detail":"epoch-0-turn-9 r3: Priya, what do you recommend if the disk and the throttle look fine?"}
+{"tClockMs":132000,"kind":"intel-suggestion-ready","detail":"suggestion-ready"}
+{"tClockMs":145000,"kind":"intel-assumption-changed","detail":"assumption-changed"}
+{"tClockMs":145000,"kind":"intel-assumption-changed","detail":"assumption-changed"}
+{"tClockMs":146900,"kind":"transcript-partial","detail":"epoch-0-turn-10 r1: Disk watermark reached. Hold the rebuild. The"}
+{"tClockMs":146900,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":148800,"kind":"transcript-partial","detail":"epoch-0-turn-10 r2: Disk watermark reached. Hold the rebuild. The earlier ready note is no longer va"}
+{"tClockMs":150600,"kind":"transcript-final","detail":"epoch-0-turn-10 r3: Disk watermark reached. Hold the rebuild. The earlier ready note is no longer va"}
+{"tClockMs":150600,"kind":"translation-fired","detail":"watermark: Batas disk tercapai. Tunda rebuild. Catatan siap sebelumnya sudah tidak berlaku."}
+{"tClockMs":158000,"kind":"transcript-discontinuity","detail":"authored replay: Audio gap: about 12 s of meeting audio is missing (simulated dropout). Not STT output."}
+{"tClockMs":170000,"kind":"transcript-discontinuity","detail":"authored replay: Connection resumed. Speech during the gap is outside coverage. Not STT output."}
+{"tClockMs":182000,"kind":"intel-question-asked","detail":"question-asked"}
+{"tClockMs":182000,"kind":"intel-suggestion-absent","detail":"suggestion-absent"}
+{"tClockMs":182000,"kind":"intel-recap-available","detail":"recap-available"}
+{"tClockMs":183300,"kind":"transcript-partial","detail":"epoch-0-turn-11 r1: Jonas, how is the cursor probe?"}
+{"tClockMs":183300,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":184500,"kind":"transcript-final","detail":"epoch-0-turn-11 r2: Jonas, how is the cursor probe?"}
+{"tClockMs":197500,"kind":"transcript-partial","detail":"epoch-0-turn-12 r1: Let us stop here. Priya owns the"}
+{"tClockMs":197500,"kind":"intel-utterance-annotated","detail":"utterance-annotated"}
+{"tClockMs":199000,"kind":"transcript-partial","detail":"epoch-0-turn-12 r2: Let us stop here. Priya owns the disk check, Jonas owns the probe."}
+{"tClockMs":200500,"kind":"transcript-final","detail":"epoch-0-turn-12 r3: Let us stop here. Priya owns the disk check, Jonas owns the probe."}
+{"tClockMs":208000,"kind":"intel-meeting-closed","detail":"meeting-closed"}
+{"tClockMs":208000,"kind":"replay-end","detail":"applied=12 duplicates=0 stale=0 translationsRejected=0 rejected=0"}
