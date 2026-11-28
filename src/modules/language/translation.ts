@@ -100,6 +100,14 @@ export type TranslationEvent = Evidence &
       }
   );
 
+export function translationMatchesRevision(
+  event: TranslationEvent,
+  revision: number,
+  state: string | undefined,
+): boolean {
+  return event.sourceRevision === revision && state !== "committed";
+}
+
 export interface TranslationSummary extends TranslationLanguages {
   readonly operationId: string;
   readonly providerId: string;

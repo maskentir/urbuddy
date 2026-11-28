@@ -1,3 +1,4 @@
+import type { TranscriptEvent } from "@modules/perception/speech";
 import { z } from "zod";
 
 export const streamEventSchema = z.object({
@@ -47,4 +48,20 @@ export interface ReplaySummary {
   readonly stale: number;
   readonly gaps: number;
   readonly missing: number;
+}
+
+type CaptionEvent = Extract<TranscriptEvent, { type: "partial" | "final" }>;
+
+export function acceptedTranscript(
+  output: SessionOutput,
+  event: CaptionEvent,
+): CaptionEvent | undefined {
+  if (
+    output.type !== "applied" ||
+    output.utteranceId !== event.utteranceId ||
+    output.revision !== event.revision ||
+    output.kind !== event.type
+  )
+    return undefined;
+  return { ...event, text: output.text };
 }

@@ -7,15 +7,12 @@ import React from "react";
 import { describe, expect, test } from "vitest";
 
 import { createOpenAITranslationProvider } from "../../src/adapters/translation/openai.js";
+import { boundTranslationProvider } from "../../src/modules/language/budget.js";
 import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
 
 import { ComprehensionEngine } from "./comprehension.js";
 import { RuntimeFeed } from "./feed.js";
-import {
-  createBudgetedProvider,
-  parseBoundedInteger,
-  traceChecksumMatches,
-} from "./qualification/translation-budget.js";
+import { parseBoundedInteger, traceChecksumMatches } from "./qualification/translation-budget.js";
 import { AdaptiveScreen } from "./screen.js";
 import type { Session, UserState } from "./session.js";
 
@@ -497,7 +494,7 @@ describe("counterfactual K: an independent transcript", () => {
 describe("translation budget", () => {
   test("an exhausted budget cannot produce an outbound request", async () => {
     let outbound = 0;
-    const provider = createBudgetedProvider(
+    const provider = boundTranslationProvider(
       {
         providerId: "stub",
         modelId: "gpt-6.1-terra",
@@ -509,10 +506,7 @@ describe("translation budget", () => {
       {
         maxRequests: 1,
         maxInputBytesPerRequest: 16_000,
-        maxOutputTokens: 1_024,
-        modelId: "gpt-6.1-terra",
       },
-      () => undefined,
     );
     const first = await provider.translate({
       messages: [{ role: "user", content: "satu" }],
@@ -529,7 +523,7 @@ describe("translation budget", () => {
 
   test("an oversized serialized request is refused before the network", async () => {
     let outbound = 0;
-    const provider = createBudgetedProvider(
+    const provider = boundTranslationProvider(
       {
         providerId: "stub",
         modelId: "gpt-6.1-terra",
@@ -541,10 +535,7 @@ describe("translation budget", () => {
       {
         maxRequests: 8,
         maxInputBytesPerRequest: 32,
-        maxOutputTokens: 1_024,
-        modelId: "gpt-6.1-terra",
       },
-      () => undefined,
     );
     const outcome = await provider.translate({
       messages: [{ role: "user", content: "x".repeat(200) }],

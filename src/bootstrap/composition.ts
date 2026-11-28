@@ -40,6 +40,7 @@ import { resolveAppPaths, type AppPaths } from "@platform/paths";
 import { createCapturePort } from "@presentation/capture";
 import { exitCodeForError, extractGlobalFlags, runCli, type CliDeps } from "@presentation/cli";
 import { createReplayPort } from "@presentation/replay";
+import { openTerminal } from "@presentation/terminal";
 import { createTranscribePort } from "@presentation/transcribe";
 import { err, ok, type Result } from "neverthrow";
 
@@ -142,6 +143,8 @@ function cliDepsFrom(
     }),
     transcribePort: createTranscribePort({
       clock: app.clock,
+      sessionId: app.sessionId,
+      ...(process.stdin.isTTY && process.stdout.isTTY ? { openTerminal } : {}),
       env,
       loopbackEndpoint: isLoopbackEndpoint(env[MUSE_TRANSCRIBE_ENDPOINT_ENV]),
       translationLoopbackEndpoint: isLoopbackTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV]),

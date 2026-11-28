@@ -203,6 +203,31 @@ node dist/bootstrap/main.js --env-file .env transcribe --translate --allow-egres
 Use `--allow-child` for native capture. See [translation contracts](docs/decisions/007-live-language-engine.md)
 and the [authored evaluation corpus](evaluation/language/README.md) for model and test scope.
 
+### Experimental terminal captions
+
+After a build, open the terminal surface on a local WAV in an interactive
+terminal:
+
+```sh
+node dist/bootstrap/main.js --env-file .env --allow-egress transcribe --file sample.wav --translate --interactive
+```
+
+This example sends WAV audio to Muse and finalized text with recent context
+to the configured translation provider. Use provider-backed runs only with
+separate authorization. For synthetic local verification, run
+`node tooling/smoke-terminal.mjs` against the compiled app. The smoke runner
+starts local speech and translation stubs.
+
+Use Up and Down to inspect retained history, O to inspect the original, D
+for diagnostics, and Esc to return to live captions. Q stops the session and
+Ctrl-C cancels it. With `--interactive` omitted, the original text and JSON
+output modes remain available.
+
+The surface shows committed translations and source partials. History is
+bounded and ephemeral. Coverage and translation failures remain visible.
+Milestone 4 semantic qualification and Milestone 5 human validation remain
+open.
+
 Available profiles: `development`, `simulation`, `evaluation`,
 `personal`, `offline`. Forbidden grants return `CONFIG_INVALID` (exit
 code 3). Validation rejects bad configuration; runtime enforcement

@@ -6,7 +6,7 @@ import type {
 } from "../../src/modules/language/translation.js";
 import { TranslationScheduler } from "../../src/modules/language/translation.js";
 import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
-import type { SessionOutput } from "../../src/modules/session/events.js";
+import { acceptedTranscript, type SessionOutput } from "../../src/modules/session/events.js";
 
 import { applyTranslation, type DomainState } from "./projection.js";
 
@@ -123,21 +123,15 @@ export class ComprehensionEngine {
     if (candidate === undefined) {
       return;
     }
-    if (candidate.revision !== output.revision || candidate.type !== output.kind) {
-      this.canonical.delete(output.utteranceId);
-      return;
-    }
     this.canonical.delete(output.utteranceId);
+    const source = acceptedTranscript(output, candidate);
+    if (source === undefined) return;
     this.consumed += 1;
     const row = this.options.domain.byKey.get(output.utteranceId);
     if (row !== undefined && candidate.type === "final") {
       row.expectsTranslation = true;
     }
-    this.scheduler.consume({
-      ...candidate,
-      revision: output.revision,
-      text: output.text,
-    });
+    this.scheduler.consume(source);
   }
 
   get acceptedEvents(): number {
