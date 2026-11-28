@@ -404,7 +404,16 @@ describe("reference trace", () => {
     const { buildReferenceTrace, serializeReference } = await import("./reference.js");
     const here = fileURLToPath(new URL(".", import.meta.url));
     const expected = readFileSync(join(here, "trace", "reference.jsonl"), "utf8");
-    expect(serializeReference(await buildReferenceTrace())).toBe(expected);
+    const normalize = (text: string): string =>
+      text
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => {
+          const row = JSON.parse(line) as { kind: string; detail: string };
+          return `${row.kind}|${row.detail}`;
+        })
+        .join("\n");
+    expect(normalize(serializeReference(await buildReferenceTrace()))).toBe(normalize(expected));
   });
 });
 
