@@ -301,14 +301,22 @@ export function evaluate(
     };
   });
 
-  const partialsByTurn = new Map<string, TraceRow[]>();
+  const partialsByUtterance = new Map<string, TraceRow[]>();
   for (const row of trace.filter(
     (item) => item.kind === "partial-committed" || item.kind === "partial-received",
   )) {
-    const turn = turnOf(row) ?? stringAt(row, "utteranceId") ?? "";
-    const bucket = partialsByTurn.get(turn) ?? [];
+    const utteranceId = stringAt(row, "utteranceId") ?? turnOf(row) ?? "";
+    const bucket = partialsByUtterance.get(utteranceId) ?? [];
     bucket.push(row);
-    partialsByTurn.set(turn, bucket);
+    partialsByUtterance.set(utteranceId, bucket);
+  }
+  const utteranceByTurn = new Map<string, string>();
+  for (const row of finals) {
+    const turn = turnOf(row);
+    const utteranceId = stringAt(row, "utteranceId");
+    if (turn !== undefined && utteranceId !== undefined) {
+      utteranceByTurn.set(turn, utteranceId);
+    }
   }
   const rendersByUtterance = new Map<string, TraceRow>();
   for (const row of trace.filter((item) => item.kind === "render-completed")) {
@@ -349,7 +357,9 @@ export function evaluate(
     const firstSegmentSpan =
       firstSegment === undefined ? undefined : manifest.spans[firstSegment.id];
     const lastSegmentSpan = lastSegment === undefined ? undefined : manifest.spans[lastSegment.id];
-    const partials = partialsByTurn.get(range.id) ?? [];
+    const turnUtterance = utteranceByTurn.get(range.id);
+    const partials =
+      turnUtterance === undefined ? [] : (partialsByUtterance.get(turnUtterance) ?? []);
     const firstPartial = partials[0];
     const finalRow = finals.find(
       (row) => (turnOf(row) ?? stringAt(row, "utteranceId") ?? "") === range.id,

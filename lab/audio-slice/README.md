@@ -91,7 +91,7 @@ The qualification lives in `lab/audio-slice/qualification/`:
 pnpm lab:muse-qualification:fixture
 
 # Preflight and, only with explicit owner authorization, the paid run
-pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <reference>
+pnpm lab:muse-qualification --env-file .env --owner-authorized --authorization <reference>
 
 # Evaluate a recorded run
 pnpm lab:muse-qualification:evaluate -- <trace.jsonl>

@@ -436,6 +436,7 @@ let progressEvents = 0;
 let clockRenderAtMs = 0;
 
 const output: string[] = [];
+let outputOffset = 0;
 const stdoutProxy = new Proxy(process.stdout, {
   get(target, property, receiver): unknown {
     if (property === "write") {
@@ -500,17 +501,18 @@ const requestRender = (): void => {
     running: !operation.signal.aborted,
   });
   const handle = renderObserver.request(target);
+  const from = outputOffset;
   if (app === undefined) {
     const frame = renderFrame();
-    output.length = 0;
     output.push(frame);
+    outputOffset = output.length;
     renderObserver.complete(handle, frame);
     return;
   }
   app.rerender(<AdaptiveApp controller={controller} />);
   void app.waitUntilRenderFlush().then(() => {
-    const written = output.join("");
-    output.length = 0;
+    const written = output.slice(from).join("");
+    outputOffset = output.length;
     renderObserver.complete(handle, written);
   });
 };

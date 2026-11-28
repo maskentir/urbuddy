@@ -27,10 +27,10 @@ personalization, or agent orchestration.
 pnpm lab:muse-qualification:fixture
 
 # 2. preflight only, no request issued
-pnpm lab:muse-qualification -- --env-file .env
+pnpm lab:muse-qualification --env-file .env
 
 # 3. authorized run, at most 30 s of audio per attempt
-pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <owner-reference>
+pnpm lab:muse-qualification --env-file .env --owner-authorized --authorization <owner-reference>
 
 # 4. evaluate the recorded run
 pnpm lab:muse-qualification:evaluate -- <trace.jsonl>
@@ -222,7 +222,7 @@ been made.
 
 | Item                            | Value                                                                                                                                                                               |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Exact launch command            | `pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <new-owner-reference>`                                                                           |
+| Exact launch command            | `pnpm lab:muse-qualification --env-file .env --owner-authorized --authorization <new-owner-reference>`                                                                              |
 | Maximum audio per attempt       | 30 s                                                                                                                                                                                |
 | Attempts used so far            | 1 of the 3 permitted by the original ceiling                                                                                                                                        |
 | Cumulative audio transmitted    | 28.68 s of the 90 s billable ceiling                                                                                                                                                |
