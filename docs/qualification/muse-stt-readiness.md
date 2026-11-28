@@ -170,3 +170,68 @@ logged, and the value never enters the trace or the commit.
 The run is authorized only after the owner confirms the credential, the
 audio budget, and the cost ceiling. Until then this document is
 readiness only, and the qualification status stays OPEN.
+
+## Requalification preflight (2026-11-28, after the correction cycle)
+
+The correction cycle fixed the evaluator, the timing model, the turn
+alignment, the render instrumentation, the audio truncation, and the
+progress renders. All of it is verified locally through the loopback
+server with no paid request. One bounded requalification attempt is
+prepared and waits for a new explicit owner authorization.
+
+### What changed since the first attempt
+
+| Change                 | Effect                                                                                                                                                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Evaluator corrected    | Word error rate 11.111 % to 6.944 %, with separate substitution, deletion, and insertion counts                                                                                                                               |
+| Timing model separated | Session initiation, websocket establishment, audio transmission, provider receipt, reducer acceptance, runtime application, projection update, render request, and render completion are distinct rows on one monotonic clock |
+| Turn alignment         | Content based, supporting merged, split, missing, inserted, and ambiguous mappings                                                                                                                                            |
+| Render instrumentation | A request and a completion are separate rows, the completion is confirmed only when the written output holds the requested utterance and revision                                                                             |
+| Audio truncation       | The operation limit is the session watchdog, not the audio ceiling, so the whole fixture is transmitted                                                                                                                       |
+| Progress renders       | Progress events no longer cause a content render                                                                                                                                                                              |
+| Vocabulary             | The configured domain vocabulary reaches the provider handshake                                                                                                                                                               |
+
+### Local verification without spending money
+
+| Check                                     | Result                                                                  |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| Audio transmitted through loopback        | 29.533 s, the whole fixture                                             |
+| Source frames to provider bytes           | exact, including the last partial frame                                 |
+| End of stream signalled                   | yes                                                                     |
+| Provider finalization                     | 6 finalized utterances                                                  |
+| Unexpected discontinuities                | 0                                                                       |
+| Stale and duplicate canonical state       | 0 and 0                                                                 |
+| Render requests and confirmed completions | 47 requests, 18 confirmed content renders, 29 unconfirmed clock renders |
+| Provider event to confirmed render        | 2.5 ms to 3.7 ms over 6 samples                                         |
+| Vocabulary in the handshake               | 16 terms, confirmed on the wire                                         |
+
+### Before and after over the same event sequence
+
+| Measure           | Previous policy             | Current policy              |
+| ----------------- | --------------------------- | --------------------------- |
+| Renders           | 294                         | 47                          |
+| Process CPU       | user 2801 ms, system 163 ms | user 1750 ms, system 177 ms |
+| Transmitted audio | 29.533 s                    | 29.533 s                    |
+| Discontinuities   | 0                           | 0                           |
+
+### Authorization boundary
+
+The owner authorization `owner-approval-2026-11-28-attempt-1` applied to
+attempt 1 only and has been consumed. No further provider request has
+been made.
+
+| Item                            | Value                                                                                                                                                                               |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact launch command            | `pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <new-owner-reference>`                                                                           |
+| Maximum audio per attempt       | 30 s                                                                                                                                                                                |
+| Attempts used so far            | 1 of the 3 permitted by the original ceiling                                                                                                                                        |
+| Cumulative audio transmitted    | 28.68 s of the 90 s billable ceiling                                                                                                                                                |
+| Cumulative estimated charge     | USD 0.001434 of the USD 0.01 owner ceiling                                                                                                                                          |
+| New attempt cost estimate       | USD 0.001477 for 29.533 s, or USD 0.0015 rounded up                                                                                                                                 |
+| Remaining owner-approved budget | USD 0.008566, and 2 attempts                                                                                                                                                        |
+| Vocabulary biasing              | enabled, predeclared, `storage-observability-domain-v1`, 16 domain terms, independent of the reference transcript                                                                   |
+| Data provenance                 | Locally authored text spoken by macOS system voices. No personal, private, confidential, or third-party meeting content.                                                            |
+| Egress conditions               | One websocket to `wss://api.meta.ai/v1/asr/realtime`. The credential travels only in the handshake frame. No other paid model is called and no translation provider is constructed. |
+| Fixture                         | Unchanged from the first attempt, sha256 `02531e349be6bd360c3dbb58d862d1c87b59d9b4830fc2f65f8b25f8bee7ecfc`                                                                         |
+
+A new explicit owner authorization is required before this command runs.

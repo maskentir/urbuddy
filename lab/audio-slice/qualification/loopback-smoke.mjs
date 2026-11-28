@@ -15,8 +15,13 @@ server.on("connection", (socket) => {
   socket.once("message", (_data, isBinary) => {
     if (!isBinary) socket.send(JSON.stringify({ sessionId: "loopback-smoke" }));
   });
+  let processedMs = 0;
   socket.on("message", (data, isBinary) => {
-    if (isBinary) return;
+    if (isBinary) {
+      processedMs += 120;
+      socket.send(JSON.stringify({ type: "audioProgress", audioProcessedMs: processedMs }));
+      return;
+    }
     if (!data.toString().includes("endStream")) return;
     for (const turn of reference.turns) {
       turnId += 1;

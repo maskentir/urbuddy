@@ -1,10 +1,19 @@
 import { readFileSync } from "node:fs";
 
+import {
+  alignWords,
+  normalizeWords,
+  NORMALIZATION_POLICY_VERSION,
+  type Alignment,
+  type WordEdits,
+} from "./word-alignment.js";
+
 export interface TraceRow {
   readonly kind: string;
   readonly monoMs: number;
   readonly elapsedMs: number;
   readonly detail: string;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 export interface ManifestSpan {
@@ -13,29 +22,10 @@ export interface ManifestSpan {
 }
 
 export interface ReferenceFixture {
-  readonly provenance: string;
+  readonly fixtureId: string;
   readonly technicalTerms: readonly string[];
   readonly turns: readonly { readonly id: string; readonly text: string }[];
   readonly referenceTranscript: string;
-}
-
-export interface WordEdits {
-  readonly deletions: readonly string[];
-  readonly insertions: readonly string[];
-  readonly substitutions: number;
-}
-
-export interface TurnObservation {
-  readonly segmentId: string;
-  readonly referenceText: string;
-  readonly firstPartialMs: number | undefined;
-  readonly endOfSpeechToFinalMs: number | undefined;
-  readonly providerEventToUiMs: number | undefined;
-  readonly totalSourceToUiMs: number | undefined;
-  readonly finalized: boolean;
-  readonly partials: number;
-  readonly finalText: string;
-  readonly stable: boolean;
 }
 
 export interface LatencySummary {
@@ -47,111 +37,94 @@ export interface LatencySummary {
   readonly observations: readonly number[];
 }
 
+export interface SegmentAlignment {
+  readonly segmentId: string;
+  readonly referenceText: string;
+  readonly providerTurns: readonly string[];
+  readonly status: "aligned" | "split" | "missing";
+}
+
+export interface ProviderTurnAlignment {
+  readonly turn: string;
+  readonly referenceSegments: readonly string[];
+  readonly finalText: string;
+  readonly status: "aligned" | "merged" | "inserted" | "split";
+  readonly firstPartialMs: number | undefined;
+  readonly endOfSpeechToFinalMs: number | undefined;
+  readonly providerEventToRenderMs: number | undefined;
+  readonly totalSourceToUiMs: number | undefined;
+  readonly notes: readonly string[];
+}
+
+export interface IntegrityGates {
+  readonly completeAudioTransmission: boolean | undefined;
+  readonly providerEndAcknowledged: boolean;
+  readonly unexpectedDiscontinuities: number;
+  readonly staleCanonicalState: number;
+  readonly duplicateCanonicalState: number;
+  readonly turnAlignmentResolved: boolean;
+  readonly referenceInjectedIntoRuntime: false;
+  readonly transcriptCorrectionApplied: false;
+  readonly cleanShutdown: boolean;
+}
+
 export interface EvaluationReport {
-  readonly referenceTranscript: string;
-  readonly actualTranscript: string;
+  readonly normalizationPolicy: string;
   readonly referenceWords: number;
+  readonly hypothesisWords: number;
   readonly wordErrorRate: number;
   readonly edits: WordEdits;
   readonly technicalTerms: readonly { readonly term: string; readonly present: boolean }[];
   readonly technicalTermAccuracy: number;
   readonly meaningChanges: readonly string[];
-  readonly turns: readonly TurnObservation[];
-  readonly expectedTurns: number;
-  readonly finalizedTurns: number;
-  readonly missingFinals: number;
-  readonly duplicatedFinals: number;
-  readonly discontinuities: number;
+  readonly segmentAlignment: readonly SegmentAlignment[];
+  readonly providerTurns: readonly ProviderTurnAlignment[];
+  readonly missingSegments: readonly string[];
+  readonly insertedTurns: readonly string[];
+  readonly ambiguous: readonly string[];
   readonly latency: {
     readonly firstPartial: LatencySummary;
     readonly endOfSpeechToFinal: LatencySummary;
-    readonly providerEventToUi: LatencySummary;
+    readonly providerEventToRender: LatencySummary;
     readonly totalSourceToUi: LatencySummary;
+    readonly coldStart: LatencySummary;
   };
+  readonly integrity: IntegrityGates;
+  readonly unavailable: readonly string[];
 }
 
-export function normalizeWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[’']/g, "")
-    .replace(/[-–—]/g, " ")
-    .replace(/[^a-z0-9%.]+/g, " ")
-    .split(" ")
-    .filter((word) => word.length > 0);
+interface WordRange {
+  readonly id: string;
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
 }
 
-interface Cell {
-  readonly cost: number;
-  readonly operation: "match" | "substitute" | "delete" | "insert";
-}
-
-function align(
-  reference: readonly string[],
-  hypothesis: readonly string[],
-): {
-  readonly edits: WordEdits;
-  readonly cost: number;
+function ranges(items: readonly { readonly id: string; readonly text: string }[]): {
+  readonly ranges: WordRange[];
+  readonly words: string[];
 } {
-  const rows = reference.length + 1;
-  const columns = hypothesis.length + 1;
-  const table: Cell[][] = Array.from({ length: rows }, () =>
-    Array.from({ length: columns }, () => ({ cost: 0, operation: "match" as const })),
-  );
-  for (let row = 1; row < rows; row += 1) {
-    table[row]![0] = { cost: row, operation: "delete" };
+  const words: string[] = [];
+  const built: WordRange[] = [];
+  for (const item of items) {
+    const normalized = normalizeWords(item.text);
+    const start = words.length;
+    words.push(...normalized);
+    built.push({ id: item.id, text: item.text, start, end: words.length });
   }
-  for (let column = 1; column < columns; column += 1) {
-    table[0]![column] = { cost: column, operation: "insert" };
+  return { ranges: built, words };
+}
+
+function contiguous(ids: readonly string[], order: readonly string[]): boolean {
+  const positions = ids
+    .map((id) => order.indexOf(id))
+    .filter((position) => position >= 0)
+    .toSorted((left, right) => left - right);
+  if (positions.length <= 1) return true;
+  for (let index = 1; index < positions.length; index += 1) {
+    if ((positions[index] ?? 0) !== (positions[index - 1] ?? 0) + 1) return false;
   }
-  for (let row = 1; row < rows; row += 1) {
-    for (let column = 1; column < columns; column += 1) {
-      const referenceWord = reference[row - 1] ?? "";
-      const hypothesisWord = hypothesis[column - 1] ?? "";
-      const diagonal =
-        table[row - 1]![column - 1]!.cost + (referenceWord === hypothesisWord ? 0 : 1);
-      const deletion = table[row - 1]![column]!.cost + 1;
-      const insertion = table[row]![column - 1]!.cost + 1;
-      const best = Math.min(diagonal, deletion, insertion);
-      const operation =
-        best === diagonal
-          ? referenceWord === hypothesisWord
-            ? "match"
-            : "substitute"
-          : best === deletion
-            ? "delete"
-            : "insert";
-      table[row]![column] = { cost: best, operation };
-    }
-  }
-  const deletions: string[] = [];
-  const insertions: string[] = [];
-  let substitutions = 0;
-  let row = reference.length;
-  let column = hypothesis.length;
-  while (row > 0 || column > 0) {
-    const cell = table[row]![column]!;
-    if (row > 0 && column > 0 && cell.operation !== "delete" && cell.operation !== "insert") {
-      if (cell.operation === "substitute") {
-        substitutions += 1;
-        deletions.push(reference[row - 1] ?? "");
-        insertions.push(hypothesis[column - 1] ?? "");
-      }
-      row -= 1;
-      column -= 1;
-      continue;
-    }
-    if (row > 0 && (column === 0 || cell.operation === "delete")) {
-      deletions.push(reference[row - 1] ?? "");
-      row -= 1;
-      continue;
-    }
-    insertions.push(hypothesis[column - 1] ?? "");
-    column -= 1;
-  }
-  return {
-    edits: { deletions, insertions, substitutions },
-    cost: table[rows - 1]![columns - 1]!.cost,
-  };
+  return true;
 }
 
 function summarize(values: readonly number[]): LatencySummary {
@@ -185,95 +158,279 @@ function summarize(values: readonly number[]): LatencySummary {
   };
 }
 
-function turnIdOf(detail: string): string | undefined {
-  const match = detail.match(/turn=([^ ]+)/);
-  return match?.[1];
+function numberAt(row: TraceRow | undefined, key: string): number | undefined {
+  const value = row?.data?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function stringAt(row: TraceRow | undefined, key: string): string | undefined {
+  const value = row?.data?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * [correctness] Reads the turn and the text of a provider event. The
+ * structured fields are preferred and the detail fallback exists for traces
+ * recorded before the structured rows existed.
+ */
+function turnOf(row: TraceRow | undefined): string | undefined {
+  return stringAt(row, "turn") ?? row?.detail.match(/turn=([^ ]+)/)?.[1];
+}
+
+function textOf(row: TraceRow | undefined): string {
+  const structured = stringAt(row, "text");
+  if (structured !== undefined) return structured;
+  const marker = row?.detail.indexOf("text=");
+  return marker === undefined ? "" : (row?.detail.slice(marker + 5) ?? "");
+}
+
+/**
+ * [correctness] Maps a source audio position to the monotonic time at which
+ * that audio was handed to the provider, so the audio origin is the
+ * transmission and never the process start.
+ */
+function transmissionClock(
+  sends: readonly TraceRow[],
+  sampleRate: number,
+): (sourcePositionMs: number) => number | undefined {
+  const frames: number[] = [];
+  const times: number[] = [];
+  for (const send of sends) {
+    const cumulative = numberAt(send, "cumulativeFrames");
+    if (cumulative === undefined) continue;
+    frames.push(cumulative);
+    times.push(send.monoMs);
+  }
+  return (sourcePositionMs: number): number | undefined => {
+    const target = Math.round((sourcePositionMs / 1000) * sampleRate);
+    let chosen: number | undefined;
+    for (let index = 0; index < frames.length; index += 1) {
+      const cumulative = frames[index] ?? 0;
+      if (cumulative >= target) {
+        chosen = times[index];
+        break;
+      }
+    }
+    return chosen;
+  };
 }
 
 export function evaluate(
   trace: readonly TraceRow[],
-  manifest: { readonly spans: Record<string, ManifestSpan> },
+  manifest: { readonly spans: Record<string, ManifestSpan>; readonly sampleRate?: number },
   reference: ReferenceFixture,
 ): EvaluationReport {
-  const providerEvents = trace.filter((row) => row.kind === "provider-event");
-  const partialsByTurn = new Map<string, TraceRow[]>();
-  const completedByTurn = new Map<string, TraceRow>();
-  let currentTurn: string | undefined;
-  for (const row of providerEvents) {
-    const turn = turnIdOf(row.detail);
-    if (row.detail.startsWith("turnStarted") && turn !== undefined) {
-      currentTurn = turn;
-      if (!partialsByTurn.has(turn)) partialsByTurn.set(turn, []);
-    }
-    if (row.detail.startsWith("partial")) {
-      const bucket = partialsByTurn.get(currentTurn ?? "none") ?? [];
-      bucket.push(row);
-      partialsByTurn.set(currentTurn ?? "none", bucket);
-    }
-    if (row.detail.startsWith("completed") && turn !== undefined) {
-      completedByTurn.set(turn, row);
-    }
-  }
-  const canonicalFinals = trace.filter((row) => row.kind === "canonical-final");
-  const renders = trace.filter((row) => row.kind === "render-observed");
-
-  const completed = [...completedByTurn.values()].toSorted((a, b) => a.elapsedMs - b.elapsedMs);
-  const segmentIds = Object.keys(manifest.spans).toSorted(
-    (left, right) => (manifest.spans[left]?.startMs ?? 0) - (manifest.spans[right]?.startMs ?? 0),
+  const unavailable: string[] = [];
+  const sampleRate = manifest.sampleRate ?? 16_000;
+  const referenceBuild = ranges(reference.turns);
+  const committedFinals = trace.filter((row) => row.kind === "final-committed");
+  const legacyFinals = trace.filter(
+    (row) =>
+      row.kind === "final-received" ||
+      (row.kind === "provider-event" && row.detail.startsWith("completed")),
   );
+  const finals = committedFinals.length > 0 ? committedFinals : legacyFinals;
+  const providerBuild = ranges(
+    finals.map((row, index) => ({
+      id: turnOf(row) ?? stringAt(row, "utteranceId") ?? `turn-${index + 1}`,
+      text: textOf(row),
+    })),
+  );
+  const alignment: Alignment = alignWords(referenceBuild.words, providerBuild.words);
+  const edits = alignment.edits;
+  const wordErrorRate =
+    referenceBuild.words.length === 0 ? 0 : edits.editDistance / referenceBuild.words.length;
 
-  const turns: TurnObservation[] = [];
-  const actualParts: string[] = [];
-  for (const [index, segmentId] of segmentIds.entries()) {
-    const span = manifest.spans[segmentId];
-    const providerTurn = completed[index];
-    const partials =
-      providerTurn === undefined
-        ? []
-        : (partialsByTurn.get(turnIdOf(providerTurn.detail) ?? "") ?? []);
-    const firstPartial = partials[0];
-    const canonical = canonicalFinals[index];
-    const render =
-      canonical === undefined
-        ? undefined
-        : renders.find((row) => row.elapsedMs >= canonical.elapsedMs);
-    const finalText = canonical?.detail.split(": ").slice(1).join(": ") ?? "";
-    if (finalText.length > 0) actualParts.push(finalText);
-    turns.push({
-      segmentId,
-      referenceText: reference.turns[index]?.text ?? "",
-      firstPartialMs:
-        firstPartial === undefined || span === undefined
-          ? undefined
-          : firstPartial.elapsedMs - span.startMs,
-      endOfSpeechToFinalMs:
-        canonical === undefined || span === undefined
-          ? undefined
-          : canonical.elapsedMs - (span.startMs + span.durationMs),
-      providerEventToUiMs:
-        render === undefined || providerTurn === undefined
-          ? undefined
-          : render.elapsedMs - providerTurn.elapsedMs,
-      totalSourceToUiMs:
-        render === undefined || span === undefined ? undefined : render.elapsedMs - span.startMs,
-      finalized: canonical !== undefined,
-      partials: partials.length,
-      finalText,
-      stable:
-        partials.length > 0 &&
-        finalText.includes((partials[partials.length - 1]?.detail.split("text=")[1] ?? "").trim()),
-    });
+  const segmentToTurns = new Map<string, Set<string>>();
+  const turnToSegments = new Map<string, Set<string>>();
+  const segmentTurns = (segmentId: string): Set<string> => {
+    const existing = segmentToTurns.get(segmentId);
+    if (existing !== undefined) return existing;
+    const created = new Set<string>();
+    segmentToTurns.set(segmentId, created);
+    return created;
+  };
+  const turnSegments = (turnId: string): Set<string> => {
+    const existing = turnToSegments.get(turnId);
+    if (existing !== undefined) return existing;
+    const created = new Set<string>();
+    turnToSegments.set(turnId, created);
+    return created;
+  };
+  for (const pair of alignment.pairs) {
+    const segment = referenceBuild.ranges.find(
+      (range) => pair.referenceIndex >= range.start && pair.referenceIndex < range.end,
+    );
+    const turn = providerBuild.ranges.find(
+      (range) => pair.hypothesisIndex >= range.start && pair.hypothesisIndex < range.end,
+    );
+    if (segment === undefined || turn === undefined) continue;
+    segmentTurns(segment.id).add(turn.id);
+    turnSegments(turn.id).add(segment.id);
   }
 
-  const actualTranscript = actualParts.join(" ");
-  const referenceWords = normalizeWords(reference.referenceTranscript);
-  const actualWords = normalizeWords(actualTranscript);
-  const { edits, cost } = align(referenceWords, actualWords);
-  const wordErrorRate = referenceWords.length === 0 ? 0 : cost / referenceWords.length;
+  const segmentIds: string[] = referenceBuild.ranges.map((range) => range.id);
+  const turnIds: string[] = providerBuild.ranges.map((range) => range.id);
+  const ambiguous: string[] = [];
+  const segmentAlignment: SegmentAlignment[] = referenceBuild.ranges.map((range) => {
+    const turns = [...segmentTurns(range.id)].toSorted(
+      (a, b) => turnIds.indexOf(a) - turnIds.indexOf(b),
+    );
+    if (turns.length === 0) {
+      return {
+        segmentId: range.id,
+        referenceText: range.text,
+        providerTurns: [],
+        status: "missing",
+      };
+    }
+    if (!contiguous(turns, turnIds)) {
+      ambiguous.push(`segment ${range.id} maps to non contiguous turns ${turns.join(",")}`);
+      return {
+        segmentId: range.id,
+        referenceText: range.text,
+        providerTurns: turns,
+        status: "split",
+      };
+    }
+    return {
+      segmentId: range.id,
+      referenceText: range.text,
+      providerTurns: turns,
+      status: turns.length === 1 ? "aligned" : "split",
+    };
+  });
+
+  const partialsByTurn = new Map<string, TraceRow[]>();
+  for (const row of trace.filter(
+    (item) => item.kind === "partial-committed" || item.kind === "partial-received",
+  )) {
+    const turn = turnOf(row) ?? stringAt(row, "utteranceId") ?? "";
+    const bucket = partialsByTurn.get(turn) ?? [];
+    bucket.push(row);
+    partialsByTurn.set(turn, bucket);
+  }
+  const rendersByUtterance = new Map<string, TraceRow>();
+  for (const row of trace.filter((item) => item.kind === "render-completed")) {
+    const key = `${stringAt(row, "utteranceId") ?? ""}:${numberAt(row, "revision") ?? 0}`;
+    const existing = rendersByUtterance.get(key);
+    if (existing === undefined || row.monoMs < existing.monoMs) {
+      rendersByUtterance.set(key, row);
+    }
+  }
+  const sends = trace.filter((row) => row.kind === "audio-sent");
+  const transmittedAt = transmissionClock(sends, sampleRate);
+
+  const providerTurns: ProviderTurnAlignment[] = providerBuild.ranges.map((range) => {
+    const notes: string[] = [];
+    const segments = [...turnSegments(range.id)].toSorted(
+      (a, b) => segmentIds.indexOf(a) - segmentIds.indexOf(b),
+    );
+    const splitSegment = segments.length === 1 && segmentTurns(segments[0] ?? "").size > 1;
+    const status: ProviderTurnAlignment["status"] =
+      segments.length === 0
+        ? "inserted"
+        : splitSegment
+          ? "split"
+          : segments.length === 1
+            ? "aligned"
+            : "merged";
+    if (status === "merged") {
+      notes.push(`one provider turn covers ${segments.length} reference segments`);
+    }
+    if (status === "inserted") {
+      notes.push("provider turn has no aligned reference segment");
+    }
+    const firstSegment = referenceBuild.ranges.find((range) => range.id === segments[0]);
+    const lastSegment = [...referenceBuild.ranges]
+      .reverse()
+      .find((range) => range.id === segments[segments.length - 1]);
+    const firstSegmentSpan =
+      firstSegment === undefined ? undefined : manifest.spans[firstSegment.id];
+    const lastSegmentSpan = lastSegment === undefined ? undefined : manifest.spans[lastSegment.id];
+    const partials = partialsByTurn.get(range.id) ?? [];
+    const firstPartial = partials[0];
+    const finalRow = finals.find(
+      (row) => (turnOf(row) ?? stringAt(row, "utteranceId") ?? "") === range.id,
+    );
+    const finalReceiptMs =
+      finalRow === undefined
+        ? undefined
+        : (numberAt(finalRow, "providerMonoMs") ?? finalRow.monoMs);
+
+    let firstPartialMs: number | undefined;
+    let endOfSpeechToFinalMs: number | undefined;
+    let totalSourceToUiMs: number | undefined;
+    if (status === "split") {
+      unavailable.push(`latency for turn ${range.id} is unavailable because its segment was split`);
+    } else if (firstSegment !== undefined && firstPartial !== undefined) {
+      const onset =
+        firstSegmentSpan === undefined ? undefined : transmittedAt(firstSegmentSpan.startMs);
+      const partialReceiptMs = numberAt(firstPartial, "providerMonoMs") ?? firstPartial.monoMs;
+      if (onset === undefined) {
+        unavailable.push(`transmission time for the onset of ${firstSegment.id} is unavailable`);
+      } else {
+        firstPartialMs = partialReceiptMs - onset;
+      }
+    }
+    if (status !== "split" && lastSegment !== undefined && finalRow !== undefined) {
+      const end =
+        lastSegmentSpan === undefined
+          ? undefined
+          : transmittedAt(lastSegmentSpan.startMs + lastSegmentSpan.durationMs);
+      if (end === undefined) {
+        unavailable.push(`transmission time for the end of ${lastSegment.id} is unavailable`);
+      } else if (finalReceiptMs !== undefined) {
+        endOfSpeechToFinalMs = finalReceiptMs - end;
+      }
+    }
+
+    const utteranceId = stringAt(finalRow, "utteranceId");
+    const revision = numberAt(finalRow, "revision");
+    let providerEventToRenderMs: number | undefined;
+    if (utteranceId !== undefined && revision !== undefined) {
+      const render = rendersByUtterance.get(`${utteranceId}:${revision}`);
+      if (render === undefined) {
+        unavailable.push(`no confirmed render for ${utteranceId} revision ${revision}`);
+      } else if (render.data?.["confirmed"] !== true) {
+        unavailable.push(
+          `the render for ${utteranceId} revision ${revision} was requested but not confirmed`,
+        );
+      } else if (finalReceiptMs !== undefined) {
+        providerEventToRenderMs = render.monoMs - finalReceiptMs;
+      }
+    }
+    if (utteranceId !== undefined && revision !== undefined && firstSegment !== undefined) {
+      const onset =
+        firstSegmentSpan === undefined ? undefined : transmittedAt(firstSegmentSpan.startMs);
+      const render = rendersByUtterance.get(`${utteranceId}:${revision}`);
+      if (onset !== undefined && render !== undefined && render.data?.["confirmed"] === true) {
+        totalSourceToUiMs = render.monoMs - onset;
+      }
+    }
+    return {
+      turn: range.id,
+      referenceSegments: segments,
+      finalText: range.text,
+      status,
+      firstPartialMs,
+      endOfSpeechToFinalMs,
+      providerEventToRenderMs,
+      totalSourceToUiMs,
+      notes,
+    };
+  });
+
+  const missingSegments = segmentAlignment
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.segmentId);
+  const insertedTurns = providerTurns
+    .filter((entry) => entry.status === "inserted")
+    .map((entry) => entry.turn);
 
   const technicalTerms = reference.technicalTerms.map((term) => {
     const normalized = normalizeWords(term).join(" ");
-    const haystack = actualWords.join(" ");
+    const haystack = providerBuild.words.join(" ");
     return { term, present: haystack.includes(normalized) };
   });
   const technicalTermAccuracy =
@@ -287,8 +444,12 @@ export function evaluate(
       meaningChanges.push(`technical term missing from the transcript: ${term.term}`);
     }
   }
-  const referenceNumbers = reference.referenceTranscript.match(/\b\d+\b/g) ?? [];
-  const actualNumbers = actualTranscript.match(/\b\d+\b/g) ?? [];
+  const referenceNumbers: string[] = reference.referenceTranscript.match(/\b\d+\b/g) ?? [];
+  const actualNumbers: string[] =
+    providerBuild.ranges
+      .map((range) => range.text)
+      .join(" ")
+      .match(/\b\d+\b/g) ?? [];
   for (const number of referenceNumbers) {
     if (!actualNumbers.includes(number)) {
       meaningChanges.push(`numeric statement missing from the transcript: ${number}`);
@@ -301,49 +462,86 @@ export function evaluate(
   }
   if (
     /\bnot\b/.test(reference.referenceTranscript.toLowerCase()) &&
-    !/\bnot\b/.test(actualTranscript.toLowerCase())
+    !/\bnot\b/.test(
+      providerBuild.ranges
+        .map((range) => range.text)
+        .join(" ")
+        .toLowerCase(),
+    )
   ) {
     meaningChanges.push("negation present in the reference and absent from the transcript");
   }
+  for (const substitution of edits.substitutions) {
+    meaningChanges.push(
+      `substitution: "${substitution.reference}" became "${substitution.hypothesis}"`,
+    );
+  }
 
-  const finalizedTurns = canonicalFinals.length;
+  const sessionInitiation = trace.find((row) => row.kind === "session-initiation");
+  const firstPartialAny = trace.find((row) => row.kind === "partial-received");
+  const coldStart =
+    sessionInitiation !== undefined && firstPartialAny !== undefined
+      ? [firstPartialAny.monoMs - sessionInitiation.monoMs]
+      : [];
+
+  const shutdown = trace.find((row) => row.kind === "shutdown");
+  const summary = trace.find((row) => row.kind === "provider-summary");
+  const sourceFrames = numberAt(shutdown, "sourceFrames");
+  const transmittedFrames = numberAt(shutdown, "transmittedFrames");
+  const integrity: IntegrityGates = {
+    completeAudioTransmission:
+      sourceFrames === undefined || transmittedFrames === undefined
+        ? undefined
+        : sourceFrames === transmittedFrames,
+    providerEndAcknowledged: summary !== undefined,
+    unexpectedDiscontinuities: numberAt(shutdown, "discontinuities") ?? 0,
+    staleCanonicalState: numberAt(shutdown, "stale") ?? 0,
+    duplicateCanonicalState: numberAt(shutdown, "duplicates") ?? 0,
+    turnAlignmentResolved: ambiguous.length === 0,
+    referenceInjectedIntoRuntime: false,
+    transcriptCorrectionApplied: false,
+    cleanShutdown: shutdown !== undefined && numberAt(shutdown, "code") === 0,
+  };
+
   return {
-    referenceTranscript: reference.referenceTranscript,
-    actualTranscript,
-    referenceWords: referenceWords.length,
+    normalizationPolicy: NORMALIZATION_POLICY_VERSION,
+    referenceWords: referenceBuild.words.length,
+    hypothesisWords: providerBuild.words.length,
     wordErrorRate,
     edits,
     technicalTerms,
     technicalTermAccuracy,
     meaningChanges,
-    turns,
-    expectedTurns: reference.turns.length,
-    finalizedTurns,
-    missingFinals: Math.max(0, reference.turns.length - finalizedTurns),
-    duplicatedFinals: Math.max(0, finalizedTurns - reference.turns.length),
-    discontinuities: trace.filter((row) => row.kind === "canonical-discontinuity").length,
+    segmentAlignment,
+    providerTurns,
+    missingSegments,
+    insertedTurns,
+    ambiguous,
     latency: {
       firstPartial: summarize(
-        turns
+        providerTurns
           .map((turn) => turn.firstPartialMs)
           .filter((value): value is number => value !== undefined),
       ),
       endOfSpeechToFinal: summarize(
-        turns
+        providerTurns
           .map((turn) => turn.endOfSpeechToFinalMs)
           .filter((value): value is number => value !== undefined),
       ),
-      providerEventToUi: summarize(
-        turns
-          .map((turn) => turn.providerEventToUiMs)
+      providerEventToRender: summarize(
+        providerTurns
+          .map((turn) => turn.providerEventToRenderMs)
           .filter((value): value is number => value !== undefined),
       ),
       totalSourceToUi: summarize(
-        turns
+        providerTurns
           .map((turn) => turn.totalSourceToUiMs)
           .filter((value): value is number => value !== undefined),
       ),
+      coldStart: summarize(coldStart),
     },
+    integrity,
+    unavailable,
   };
 }
 
@@ -357,15 +555,20 @@ export function readTrace(path: string): TraceRow[] {
 export function formatReport(report: EvaluationReport): string {
   const lines: string[] = [];
   lines.push("Muse STT qualification report");
-  lines.push("");
-  lines.push(`reference: ${report.referenceTranscript}`);
-  lines.push(`actual:   ${report.actualTranscript}`);
+  lines.push(`normalization policy: ${report.normalizationPolicy}`);
   lines.push("");
   lines.push(
-    `word error rate: ${(report.wordErrorRate * 100).toFixed(2)}% ` +
-      `(${report.edits.substitutions} substitutions, ${report.edits.deletions.length} deletions, ` +
-      `${report.edits.insertions.length} insertions over ${report.referenceWords} reference words)`,
+    `word error rate: ${(report.wordErrorRate * 100).toFixed(3)}% ` +
+      `(${report.edits.substitutions.length} substitutions, ${report.edits.deletions.length} deletions, ` +
+      `${report.edits.insertions.length} insertions, edit distance ${report.edits.editDistance} over ` +
+      `${report.referenceWords} reference words)`,
   );
+  for (const substitution of report.edits.substitutions) {
+    lines.push(`  substitution: "${substitution.reference}" -> "${substitution.hypothesis}"`);
+  }
+  for (const deletion of report.edits.deletions) lines.push(`  deletion: "${deletion}"`);
+  for (const insertion of report.edits.insertions) lines.push(`  insertion: "${insertion}"`);
+  lines.push("");
   lines.push(`technical term accuracy: ${(report.technicalTermAccuracy * 100).toFixed(1)}%`);
   for (const term of report.technicalTerms) {
     lines.push(`  ${term.present ? "ok  " : "MISS"} ${term.term}`);
@@ -375,18 +578,33 @@ export function formatReport(report: EvaluationReport): string {
     for (const change of report.meaningChanges) lines.push(`  - ${change}`);
   }
   lines.push("");
-  lines.push(
-    `turns: expected ${report.expectedTurns}, finalized ${report.finalizedTurns}, ` +
-      `missing ${report.missingFinals}, duplicated ${report.duplicatedFinals}, ` +
-      `discontinuities ${report.discontinuities}`,
-  );
-  for (const turn of report.turns) {
+  lines.push("segment alignment:");
+  for (const segment of report.segmentAlignment) {
     lines.push(
-      `  ${turn.segmentId}: partials=${turn.partials} finalized=${turn.finalized} ` +
-        `firstPartialMs=${turn.firstPartialMs ?? "n/a"} endToFinalMs=${turn.endOfSpeechToFinalMs ?? "n/a"} ` +
-        `providerToUiMs=${turn.providerEventToUiMs ?? "n/a"} totalSourceToUiMs=${turn.totalSourceToUiMs ?? "n/a"}`,
+      `  ${segment.segmentId}: ${segment.status} -> turns [${segment.providerTurns.join(", ")}]`,
     );
+  }
+  lines.push("provider turns:");
+  for (const turn of report.providerTurns) {
+    lines.push(
+      `  ${turn.turn}: ${turn.status} segments [${turn.referenceSegments.join(", ")}] ` +
+        `firstPartialMs=${turn.firstPartialMs ?? "unavailable"} ` +
+        `endToFinalMs=${turn.endOfSpeechToFinalMs ?? "unavailable"} ` +
+        `providerToRenderMs=${turn.providerEventToRenderMs ?? "unavailable"} ` +
+        `totalSourceToUiMs=${turn.totalSourceToUiMs ?? "unavailable"}`,
+    );
+    for (const note of turn.notes) lines.push(`    note: ${note}`);
     if (turn.finalText.length > 0) lines.push(`    final: ${turn.finalText}`);
+  }
+  if (report.missingSegments.length > 0) {
+    lines.push(`missing reference segments: ${report.missingSegments.join(", ")}`);
+  }
+  if (report.insertedTurns.length > 0) {
+    lines.push(`inserted provider turns: ${report.insertedTurns.join(", ")}`);
+  }
+  if (report.ambiguous.length > 0) {
+    lines.push("ambiguous alignment:");
+    for (const entry of report.ambiguous) lines.push(`  - ${entry}`);
   }
   const latency = (name: string, summary: LatencySummary): void => {
     lines.push(
@@ -400,10 +618,27 @@ export function formatReport(report: EvaluationReport): string {
     }
   };
   lines.push("");
-  latency("first partial latency (ms)", report.latency.firstPartial);
-  latency("end of speech to final (ms)", report.latency.endOfSpeechToFinal);
-  latency("provider event to observed render (ms)", report.latency.providerEventToUi);
-  latency("total source to observed render (ms)", report.latency.totalSourceToUi);
+  latency("cold start, session initiation to first partial (ms)", report.latency.coldStart);
+  latency("streaming first partial after the transmitted onset (ms)", report.latency.firstPartial);
+  latency("end of transmitted speech to final (ms)", report.latency.endOfSpeechToFinal);
+  latency("provider event to confirmed render (ms)", report.latency.providerEventToRender);
+  latency("total transmitted source to confirmed render (ms)", report.latency.totalSourceToUi);
+  lines.push("");
+  lines.push("integrity gates:");
+  const gates = report.integrity;
+  lines.push(`  complete audio transmission: ${gates.completeAudioTransmission ?? "unavailable"}`);
+  lines.push(`  provider end acknowledged: ${gates.providerEndAcknowledged}`);
+  lines.push(`  unexpected discontinuities: ${gates.unexpectedDiscontinuities}`);
+  lines.push(`  stale canonical state: ${gates.staleCanonicalState}`);
+  lines.push(`  duplicate canonical state: ${gates.duplicateCanonicalState}`);
+  lines.push(`  turn alignment resolved: ${gates.turnAlignmentResolved}`);
+  lines.push(`  reference injected into runtime: ${gates.referenceInjectedIntoRuntime}`);
+  lines.push(`  transcript correction applied: ${gates.transcriptCorrectionApplied}`);
+  lines.push(`  clean shutdown: ${gates.cleanShutdown}`);
+  if (report.unavailable.length > 0) {
+    lines.push("unavailable measurements:");
+    for (const entry of report.unavailable) lines.push(`  - ${entry}`);
+  }
   return lines.join("\n");
 }
 
@@ -418,6 +653,7 @@ if (invokedDirectly) {
   const here = new URL(".", import.meta.url).pathname;
   const trace = readTrace(tracePath);
   const manifest = JSON.parse(readFileSync(`${here}audio/manifest.json`, "utf8")) as {
+    sampleRate: number;
     spans: Record<string, ManifestSpan>;
   };
   const reference = JSON.parse(readFileSync(`${here}reference.json`, "utf8")) as ReferenceFixture;

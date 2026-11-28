@@ -1,0 +1,22 @@
+{
+  "vocabularyId": "storage-observability-domain-v1",
+  "policy": "A general storage and observability domain glossary. It is not derived from the evaluation reference transcript and it contains no expected answers. It is a biasing hint only: the raw provider transcript is always preserved.",
+  "terms": [
+    "replication lag",
+    "connection pool",
+    "write ahead log",
+    "compaction lease",
+    "tombstone sweep",
+    "p99 latency",
+    "disk watermark",
+    "backoff with jitter",
+    "write amplification",
+    "snapshot",
+    "checkpoint",
+    "throughput",
+    "failover",
+    "time to live",
+    "queue depth",
+    "cold start"
+  ]
+}

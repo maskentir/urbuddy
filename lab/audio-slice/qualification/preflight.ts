@@ -8,9 +8,12 @@ export const FIXTURE_PROVENANCE =
   "Authored for Urbuddy. Spoken locally by macOS system voices. " +
   "No personal, private, confidential, or third-party meeting content.";
 
-export const MUSE_OFFICIAL_ENDPOINT = resolveMuseEndpoint(undefined).isOk()
-  ? resolveMuseEndpoint(undefined).value
-  : "wss://api.meta.ai/v1/asr/realtime";
+function officialEndpoint(): string {
+  const resolved = resolveMuseEndpoint(undefined);
+  return resolved.isOk() ? resolved.value : "wss://api.meta.ai/v1/asr/realtime";
+}
+
+export const MUSE_OFFICIAL_ENDPOINT = officialEndpoint();
 
 export type PreflightStatus = "pass" | "fail" | "unverified";
 

@@ -148,3 +148,90 @@ work. This is an efficiency finding, not a correctness finding.
 5. Progress events trigger renders.
 6. Speaker diarization and addressee recognition are not qualified by this
    endpointing run.
+
+---
+
+## Correction, 2026-11-28 (appended, the results above are preserved)
+
+An independent review found two defects in the evaluator that produced the
+word error rate above. The original results are preserved above. This
+section records the corrected evaluation of the same raw trace and the
+code changes that made it correct.
+
+### Reviewer findings and their resolution
+
+| Finding                                                                                       | Resolution                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Substitutions were also pushed into the deletion and insertion arrays                         | `lab/audio-slice/qualification/word-alignment.ts` counts a substitution once, as its own operation, and keeps the pair                                                         |
+| `normalizeWords` kept sentence-ending periods although the policy says punctuation is removed | The policy is now explicit as `norm-v2` and strips sentence punctuation from token edges while preserving intra-token technical and numeric punctuation                        |
+| The evaluator paired reference segments and provider turns by array index                     | The mapping now comes from a transcript alignment that supports one segment to many turns, many segments to one turn, missing segments, inserted turns, and ambiguous mappings |
+
+### Corrected evaluation of the same trace
+
+| Measure         | Original | Corrected   |
+| --------------- | -------- | ----------- |
+| Reference words | 72       | 72          |
+| Substitutions   | 7        | **4**       |
+| Deletions       | 8        | **1**       |
+| Insertions      | 7        | **0**       |
+| Edit distance   | 22       | **5**       |
+| Word error rate | 11.111 % | **6.944 %** |
+
+The corrected counts match the independent review exactly. The
+substitution pairs are `write` to `right`, `is` to `leases`, `p99` to
+`page`, and `latency` to `99`, with the single deletion `lease`. The
+alternative minimal alignment that attributes the same edit to
+`lease` to `leases` and deletes `is` is equally valid and yields the same
+counts.
+
+Technical-term accuracy is unchanged at 75 % (6 of 8). The two material
+meaning changes are unchanged: `write ahead log` became `the right ahead
+log`, and `p99 latency` became `page 99`.
+
+### Corrected turn alignment
+
+| Reference segment | Provider turn | Status     |
+| ----------------- | ------------- | ---------- |
+| t1                | turn 0        | aligned    |
+| t2                | turn 1        | aligned    |
+| t3                | turn 2        | **merged** |
+| t4                | turn 2        | **merged** |
+| t5                | turn 3        | aligned    |
+| t6                | turn 4        | aligned    |
+
+The ordinal pairing in the original report mislabelled every segment
+after the merge. The alignment shows that the provider produced five
+finals for six reference turns and that no reference content is missing.
+
+### Metrics that the preserved trace cannot establish
+
+The preserved trace predates the corrected instrumentation, so the
+following cannot be recovered and are not manufactured:
+
+- The first partial latency after the transmitted onset. The trace has no
+  source sample position per transmitted frame.
+- The end of speech to final latency measured from the transmitted audio.
+- The provider event to observed render latency. The trace recorded a
+  render request immediately after the rerender call, with no completion
+  boundary and no utterance identity.
+- The cold start split. The trace has no session initiation row.
+- The complete audio transmission gate. The trace has no source frame
+  count to compare against the transmitted frame count.
+
+The one metric the preserved trace does establish is the count of
+provider events and the number of renders under the previous policy: 427
+canonical events produced 427 render observations.
+
+### Provenance
+
+| Item                 | Value                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Executed revision    | `7281f89325d2a2240ec573e0bfb3b1e69068d5b5`                                                                   |
+| Evaluator revision   | the commit that adds `word-alignment.ts` and the alignment based mapping                                     |
+| Normalization policy | `norm-v2`                                                                                                    |
+| Raw trace            | `muse-1795854066445.jsonl`, sha256 `d9d913b0666831c40b553fc25bc9618365cb43e4b91aca8a5cdc2bbb9557b4b2`        |
+| Fixture              | `qualification.wav`, sha256 `02531e349be6bd360c3dbb58d862d1c87b59d9b4830fc2f65f8b25f8bee7ecfc`               |
+| Reference transcript | `reference.json`, sha256 `a37df87f19fd1d35c22106ac968f40f43c12f49caed0ec54b4808de781c0e6b1`                  |
+| Captured sequence    | `fixtures/captured-sequence.json`, sha256 `72b9f011a642fa36e7c274b32110b7b42e83feaf60a8bc474e4ab7d6a46d17cf` |
+
+The raw trace stays private and is not committed.
