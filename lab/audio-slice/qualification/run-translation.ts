@@ -56,6 +56,8 @@ const { values } = parseArgs({
     model: { type: "string" },
     "max-requests": { type: "string" },
     "max-input-bytes": { type: "string" },
+    "owner-authorized": { type: "boolean" },
+    authorization: { type: "string" },
     output: { type: "string" },
   },
 });
@@ -100,6 +102,15 @@ const captured = readFileSync(tracePath, "utf8")
 
 if (captured.length === 0) {
   throw new Error("the captured trace carries no canonical final transcript events");
+}
+
+if (values["owner-authorized"] !== true || values.authorization === undefined) {
+  process.stdout.write(
+    "translation execution is not authorized. A translation specific owner authorization and an\n" +
+      "authorization reference are required, and the Muse authorization is not reused.\n" +
+      "No provider request was issued.\n",
+  );
+  process.exit(2);
 }
 
 const translationConfig = loadTranslationConfig(true, {}, env);
@@ -182,6 +193,7 @@ const rate = TRANSLATION_RATES_PER_MILLION_TOKENS[model];
 const lines: string[] = [];
 lines.push("translation-only qualification");
 lines.push(`model=${model} provider=${provider.value.providerId} endpoint=from environment`);
+lines.push(`authorization: ${values.authorization}`);
 lines.push(
   `captured canonical final events=${captured.length} evaluation cases=${cases.length} ` +
     `development=${development.cases.length} heldout=${heldout.cases.length}`,
