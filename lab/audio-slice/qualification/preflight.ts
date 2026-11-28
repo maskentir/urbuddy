@@ -38,6 +38,9 @@ export interface PreflightInput {
   readonly fixtureChannels: number;
   readonly fixtureProvenance: string;
   readonly loopbackEndpoint?: string;
+  readonly cumulativeBudget?: { readonly allowed: boolean; readonly detail: string };
+  readonly watchdogConnectionSeconds: number;
+  readonly watchdogFinalizationSeconds: number;
 }
 
 export interface PreflightResult {
@@ -49,6 +52,8 @@ const MAX_AUDIO_SECONDS = 30;
 const MAX_ATTEMPTS = 3;
 const MAX_BILLABLE_SECONDS = 90;
 const MAX_SPENDING_CEILING_USD = 0.01;
+export const PROVIDER_HANDSHAKE_TIMEOUT_SECONDS = 10;
+export const PROVIDER_DRAIN_TIMEOUT_SECONDS = 15;
 const EXPECTED_MAX_COST_USD = 0.0045;
 
 export function expectedMaxCostUsd(maxAttempts: number): number {
@@ -165,6 +170,23 @@ export function runPreflight(input: PreflightInput): PreflightResult {
         : "no explicit owner authorization for paid execution and external audio transmission",
   );
 
+  add(
+    "provider-timeout-boundaries",
+    input.watchdogConnectionSeconds >= PROVIDER_HANDSHAKE_TIMEOUT_SECONDS &&
+      input.watchdogFinalizationSeconds >= PROVIDER_DRAIN_TIMEOUT_SECONDS
+      ? "pass"
+      : "fail",
+    `the provider handshake times out after ${PROVIDER_HANDSHAKE_TIMEOUT_SECONDS}s and the ` +
+      `finalization drain after ${PROVIDER_DRAIN_TIMEOUT_SECONDS}s; the watchdog allowances are ` +
+      `${input.watchdogConnectionSeconds}s and ${input.watchdogFinalizationSeconds}s`,
+  );
+  if (input.cumulativeBudget !== undefined) {
+    add(
+      "cumulative-budget",
+      input.cumulativeBudget.allowed ? "pass" : "fail",
+      input.cumulativeBudget.detail,
+    );
+  }
   const blocked = checks.some((check) => check.status === "fail");
   return { checks, blocked };
 }

@@ -14,6 +14,11 @@ export interface RenderObservation {
 
 export type RenderEmitter = (observation: RenderObservation) => void;
 
+export interface RenderHandle {
+  readonly target: RenderTarget;
+  readonly requestMonoMs: number;
+}
+
 function comparable(text: string): string {
   return text
     .replace(/\u001B\[[0-9;]*m/g, "")
@@ -30,19 +35,22 @@ export function createRenderObserver(
   emit: RenderEmitter,
   now: () => number,
 ): {
-  request: (target: RenderTarget) => void;
-  complete: (target: RenderTarget, written: string) => void;
+  request: (target: RenderTarget) => RenderHandle;
+  complete: (handle: RenderHandle, written: string) => void;
 } {
   return {
-    request: (target: RenderTarget): void => {
+    request: (target: RenderTarget): RenderHandle => {
+      const handle: RenderHandle = { target, requestMonoMs: now() };
       emit({
         kind: "render-requested",
         utteranceId: target.utteranceId,
         revision: target.revision,
-        monoMs: now(),
+        monoMs: handle.requestMonoMs,
       });
+      return handle;
     },
-    complete: (target: RenderTarget, written: string): void => {
+    complete: (handle: RenderHandle, written: string): void => {
+      const { target } = handle;
       emit({
         kind: "render-completed",
         utteranceId: target.utteranceId,

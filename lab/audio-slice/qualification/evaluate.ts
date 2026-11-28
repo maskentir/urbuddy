@@ -312,6 +312,7 @@ export function evaluate(
   }
   const rendersByUtterance = new Map<string, TraceRow>();
   for (const row of trace.filter((item) => item.kind === "render-completed")) {
+    if (row.data?.["confirmed"] !== true) continue;
     const key = `${stringAt(row, "utteranceId") ?? ""}:${numberAt(row, "revision") ?? 0}`;
     const existing = rendersByUtterance.get(key);
     if (existing === undefined || row.monoMs < existing.monoMs) {
@@ -392,10 +393,6 @@ export function evaluate(
       const render = rendersByUtterance.get(`${utteranceId}:${revision}`);
       if (render === undefined) {
         unavailable.push(`no confirmed render for ${utteranceId} revision ${revision}`);
-      } else if (render.data?.["confirmed"] !== true) {
-        unavailable.push(
-          `the render for ${utteranceId} revision ${revision} was requested but not confirmed`,
-        );
       } else if (finalReceiptMs !== undefined) {
         providerEventToRenderMs = render.monoMs - finalReceiptMs;
       }

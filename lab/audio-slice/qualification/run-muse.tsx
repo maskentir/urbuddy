@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -20,6 +20,15 @@ import {
   MUSE_PRICE_PER_HOUR_USD,
   type ProviderObservation,
 } from "./instrumented-provider.js";
+import {
+  QUALIFICATION_LEDGER_LIMITS,
+  cumulativeUsage,
+  fileSha256,
+  ledgerDecision,
+  readLedger,
+  writeLedger,
+  type AttemptRecord,
+} from "./ledger.js";
 import { qualificationTimeouts, timeoutDecision } from "./limits.js";
 import { FIXTURE_PROVENANCE, formatPreflight, runPreflight } from "./preflight.js";
 import { createRenderObserver } from "./render-observer.js";
@@ -38,6 +47,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const DEFAULT_MANIFEST = join(here, "audio", "manifest.json");
 const DEFAULT_VOCABULARY = join(here, "vocabulary.json");
 const TRACE_DIR = join(here, "trace");
+const LEDGER_PATH = join(here, "state", "attempts.json");
 
 interface TraceRow {
   readonly kind: string;
@@ -58,8 +68,8 @@ const { values } = parseArgs({
     authorization: { type: "string" },
     "max-seconds": { type: "string" },
     "max-attempts": { type: "string" },
-    "connection-seconds": { type: "string" },
-    "drain-seconds": { type: "string" },
+    "watchdog-connection-seconds": { type: "string" },
+    "watchdog-finalization-seconds": { type: "string" },
     keywords: { type: "string" },
     vocabulary: { type: "string" },
     headless: { type: "boolean" },
@@ -77,8 +87,13 @@ if (values.help === true) {
 const maxAudioSeconds = values["max-seconds"] === undefined ? 30 : Number(values["max-seconds"]);
 const maxAttempts = values["max-attempts"] === undefined ? 3 : Number(values["max-attempts"]);
 const connectionSeconds =
-  values["connection-seconds"] === undefined ? 15 : Number(values["connection-seconds"]);
-const drainSeconds = values["drain-seconds"] === undefined ? 15 : Number(values["drain-seconds"]);
+  values["watchdog-connection-seconds"] === undefined
+    ? 15
+    : Number(values["watchdog-connection-seconds"]);
+const drainSeconds =
+  values["watchdog-finalization-seconds"] === undefined
+    ? 15
+    : Number(values["watchdog-finalization-seconds"]);
 const model = values.model ?? "muse-voice-transcribe-1.0";
 const mode = values.mode ?? "endpointing";
 const ownerAuthorized = values["owner-authorized"] === true;
@@ -104,6 +119,22 @@ if (environment.isErr()) {
 }
 const env = environment.value;
 
+const fixturePath = values.fixture ?? join(here, "audio", "qualification.wav");
+const fixtureSha256 = fileSha256(fixturePath);
+const ledger = readLedger(LEDGER_PATH);
+const usage = cumulativeUsage(ledger);
+const nextAttemptCostUsd = (maxAudioSeconds * MUSE_PRICE_PER_HOUR_USD) / 3600;
+const budget = ledgerDecision(
+  ledger,
+  QUALIFICATION_LEDGER_LIMITS,
+  maxAudioSeconds,
+  nextAttemptCostUsd,
+);
+process.stdout.write(
+  `ledger: ${usage.attempts} recorded attempts, ${usage.seconds.toFixed(2)}s and ` +
+    `USD ${usage.costUsd.toFixed(6)} consumed; ${budget.detail}\n`,
+);
+
 const manifest = JSON.parse(readFileSync(DEFAULT_MANIFEST, "utf8")) as {
   audioMs: number;
   sampleRate: number;
@@ -124,6 +155,9 @@ const preflight = runPreflight({
   fixtureSampleRate: manifest.sampleRate,
   fixtureChannels: 1,
   fixtureProvenance: FIXTURE_PROVENANCE,
+  cumulativeBudget: { allowed: budget.allowed, detail: budget.detail },
+  watchdogConnectionSeconds: connectionSeconds,
+  watchdogFinalizationSeconds: drainSeconds,
   ...(loopbackEndpoint === undefined ? {} : { loopbackEndpoint }),
 });
 process.stdout.write(`${formatPreflight(preflight)}\n`);
@@ -131,10 +165,11 @@ process.stdout.write(
   `vocabulary: ${vocabulary.vocabularyId} (${keywords.length} terms, sent to the provider handshake)\n`,
 );
 process.stdout.write(
-  `limits: transmitted audio ${maxAudioSeconds}s, connection ${connectionSeconds}s, ` +
-    `finalization ${drainSeconds}s, watchdog ${maxAudioSeconds + connectionSeconds + drainSeconds}s\n`,
+  `limits: transmitted audio ${maxAudioSeconds}s, watchdog allowances ` +
+    `connection ${connectionSeconds}s and finalization ${drainSeconds}s, ` +
+    `watchdog ${maxAudioSeconds + connectionSeconds + drainSeconds}s\n`,
 );
-if (preflight.blocked) {
+if (preflight.blocked || !budget.allowed) {
   process.stdout.write(
     "\nNo provider request was issued. Exact launch command after owner authorization:\n" +
       "  pnpm lab:muse-qualification -- --owner-authorized --authorization <owner-reference>\n",
@@ -142,7 +177,6 @@ if (preflight.blocked) {
   process.exit(2);
 }
 
-const fixturePath = values.fixture ?? join(here, "audio", "qualification.wav");
 const opened = await openWavSource(fixturePath, { pacing: "realtime" });
 if (opened.isErr()) {
   throw new Error(
@@ -368,6 +402,18 @@ const finish = (code: number): void => {
   const target = values.output ?? join(TRACE_DIR, `muse-${Date.now()}.jsonl`);
   writeFileSync(target, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
   process.stdout.write(`trace: ${target}\n`);
+  const record: AttemptRecord = {
+    at: new Date().toISOString(),
+    authorization: values.authorization ?? "none",
+    transmittedSeconds: Number(instrumented.transmittedSeconds().toFixed(3)),
+    estimatedCostUsd: Number(instrumented.estimatedCostUsd().toFixed(6)),
+    fixtureSha256,
+    trace: target,
+  };
+  if (loopbackEndpoint === undefined) {
+    mkdirSync(dirname(LEDGER_PATH), { recursive: true });
+    writeLedger(LEDGER_PATH, { attempts: [...ledger.attempts, record] });
+  }
   process.exitCode = code;
 };
 
@@ -388,8 +434,6 @@ let renderRequests = 0;
 let renderCompletions = 0;
 let progressEvents = 0;
 let clockRenderAtMs = 0;
-let pendingRender:
-  { readonly utteranceId: string; readonly revision: number; readonly text: string } | undefined;
 
 const output: string[] = [];
 const stdoutProxy = new Proxy(process.stdout, {
@@ -455,22 +499,19 @@ const requestRender = (): void => {
     atMs: Math.round(performance.now() - startedMonoMs),
     running: !operation.signal.aborted,
   });
-  renderObserver.request(target);
+  const handle = renderObserver.request(target);
   if (app === undefined) {
     const frame = renderFrame();
     output.length = 0;
     output.push(frame);
-    renderObserver.complete(target, frame);
+    renderObserver.complete(handle, frame);
     return;
   }
-  pendingRender = target;
   app.rerender(<AdaptiveApp controller={controller} />);
   void app.waitUntilRenderFlush().then(() => {
-    const pending = pendingRender;
-    if (pending === undefined) return;
     const written = output.join("");
     output.length = 0;
-    renderObserver.complete(pending, written);
+    renderObserver.complete(handle, written);
   });
 };
 

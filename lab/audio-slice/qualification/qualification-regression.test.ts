@@ -1,6 +1,6 @@
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ok } from "neverthrow";
@@ -11,6 +11,12 @@ import { createMuseProviderFromEnv } from "../../../src/adapters/speech/muse.js"
 import type { CaptureSource, SourceItem } from "../../../src/modules/perception/audio.js";
 import { runTranscription } from "../../../src/modules/perception/speech.js";
 
+import {
+  QUALIFICATION_LEDGER_LIMITS,
+  cumulativeUsage,
+  ledgerDecision,
+  readLedger,
+} from "./ledger.js";
 import { qualificationTimeouts, timeoutDecision } from "./limits.js";
 import { createRenderObserver } from "./render-observer.js";
 import { CLOCK_RENDER_INTERVAL_MS, decideRender } from "./render-policy.js";
@@ -215,15 +221,12 @@ describe("render instrumentation", () => {
         observations.push({ kind: observation.kind, confirmed: observation.confirmed }),
       () => 1_000,
     );
-    observer.request({
+    const handle = observer.request({
       utteranceId: "epoch-0-turn-1",
       revision: 2,
       text: "The cache lock is held.",
     });
-    observer.complete(
-      { utteranceId: "epoch-0-turn-1", revision: 2, text: "The cache lock is held." },
-      "…The cache lock is held.…",
-    );
+    observer.complete(handle, "…The cache lock is held.…");
     expect(observations).toHaveLength(2);
     expect(observations[0]?.kind).toBe("render-requested");
     expect(observations[1]?.kind).toBe("render-completed");
@@ -237,16 +240,58 @@ describe("render instrumentation", () => {
         observations.push({ kind: observation.kind, confirmed: observation.confirmed }),
       () => 2_000,
     );
-    observer.request({
+    const handle = observer.request({
       utteranceId: "epoch-0-turn-1",
       revision: 1,
       text: "The cache lock is held.",
     });
-    observer.complete(
-      { utteranceId: "epoch-0-turn-1", revision: 1, text: "The cache lock is held." },
-      "…Unrelated content from a later frame…",
-    );
+    observer.complete(handle, "…Unrelated content from a later frame…");
     expect(observations[1]?.confirmed).toBe(false);
+  });
+});
+
+describe("overlapping render requests", () => {
+  test("a later flush cannot attribute its completion to another utterance", () => {
+    const observations: {
+      kind: string;
+      utteranceId: string;
+      revision: number;
+      confirmed?: boolean | undefined;
+    }[] = [];
+    const observer = createRenderObserver(
+      (observation) =>
+        observations.push({
+          kind: observation.kind,
+          utteranceId: observation.utteranceId,
+          revision: observation.revision,
+          confirmed: observation.confirmed,
+        }),
+      () => 1_000,
+    );
+    const first = observer.request({
+      utteranceId: "epoch-0-turn-1",
+      revision: 1,
+      text: "the first utterance",
+    });
+    const second = observer.request({
+      utteranceId: "epoch-0-turn-2",
+      revision: 4,
+      text: "the second utterance",
+    });
+    observer.complete(second, "…the second utterance…");
+    observer.complete(first, "…the first utterance…");
+    expect(observations.map((entry) => entry.kind)).toEqual([
+      "render-requested",
+      "render-requested",
+      "render-completed",
+      "render-completed",
+    ]);
+    expect(observations[2]?.utteranceId).toBe("epoch-0-turn-2");
+    expect(observations[2]?.revision).toBe(4);
+    expect(observations[2]?.confirmed).toBe(true);
+    expect(observations[3]?.utteranceId).toBe("epoch-0-turn-1");
+    expect(observations[3]?.revision).toBe(1);
+    expect(observations[3]?.confirmed).toBe(true);
   });
 });
 
@@ -286,5 +331,61 @@ describe("progress render policy", () => {
     expect(contentRenders).toBe(68);
     expect(after).toBe(98);
     expect(after).toBeLessThan(before);
+  });
+});
+
+describe("cumulative qualification ledger", () => {
+  test("the ledger persists across invocations and refuses the ceiling", () => {
+    const path = join(fileURLToPath(new URL(".", import.meta.url)), "state", "ledger-test.json");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        attempts: [
+          {
+            at: "2026-11-28T08:20:35.000Z",
+            authorization: "owner-approval-attempt-1",
+            transmittedSeconds: 28.68,
+            estimatedCostUsd: 0.001434,
+            fixtureSha256: "abc",
+            trace: "trace-1.jsonl",
+          },
+        ],
+      }),
+    );
+    const state = readLedger(path);
+    const usage = cumulativeUsage(state);
+    expect(usage.attempts).toBe(1);
+    expect(usage.seconds).toBeCloseTo(28.68, 5);
+    expect(usage.costUsd).toBeCloseTo(0.001434, 6);
+    const within = ledgerDecision(state, QUALIFICATION_LEDGER_LIMITS, 29.533, 0.001477);
+    expect(within.allowed).toBe(true);
+    const overCost = ledgerDecision(
+      { attempts: [...state.attempts, { ...state.attempts[0]!, estimatedCostUsd: 0.009 }] },
+      QUALIFICATION_LEDGER_LIMITS,
+      29.533,
+      0.001477,
+    );
+    expect(overCost.allowed).toBe(false);
+    expect(overCost.detail).toContain("cumulative cost ceiling");
+    const overAttempts = ledgerDecision(
+      {
+        attempts: [state.attempts[0]!, state.attempts[0]!, state.attempts[0]!],
+      },
+      QUALIFICATION_LEDGER_LIMITS,
+      1,
+      0.0001,
+    );
+    expect(overAttempts.allowed).toBe(false);
+    expect(overAttempts.detail).toContain("attempt ceiling");
+    const overAudio = ledgerDecision(
+      { attempts: [...state.attempts, { ...state.attempts[0]!, transmittedSeconds: 70 }] },
+      QUALIFICATION_LEDGER_LIMITS,
+      29.533,
+      0.001477,
+    );
+    expect(overAudio.allowed).toBe(false);
+    expect(overAudio.detail).toContain("cumulative audio ceiling");
+    rmSync(path, { force: true });
   });
 });

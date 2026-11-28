@@ -235,3 +235,32 @@ been made.
 | Fixture                         | Unchanged from the first attempt, sha256 `02531e349be6bd360c3dbb58d862d1c87b59d9b4830fc2f65f8b25f8bee7ecfc`                                                                         |
 
 A new explicit owner authorization is required before this command runs.
+
+## Known issues
+
+| Issue                                                                                                                                                                                                                                                     | State                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One repository gate run reported a single failing test while it executed concurrently with a production build and a local loopback server. Two subsequent isolated runs passed 337 of 337. The failing assertion was not captured in the captured output. | **Unresolved.** It is not reproduced in isolation, so it is not claimed to be fixed, and no test was weakened to hide it.                                      |
+| The first attempt transmitted 28.68 s of the 29.53 s fixture because the operation limit was the audio ceiling.                                                                                                                                           | Fixed in the correction cycle. The operation limit is now the session watchdog and the whole fixture is transmitted.                                           |
+| The first report stated an edit distance of 22.                                                                                                                                                                                                           | Corrected. The original edit distance was 8; 22 was the sum of the incorrectly reported operation counts.                                                      |
+| The first report paired reference segments with provider turns by index.                                                                                                                                                                                  | Corrected. The mapping now comes from a transcript alignment.                                                                                                  |
+| The first report recorded a render request as a render observation.                                                                                                                                                                                       | Corrected. A request and a completion are separate rows and a completion is confirmed only when the written output holds the requested utterance and revision. |
+
+## Limits and their boundaries
+
+| Limit                                  | Value                    | Enforced by                                                                                                                     |
+| -------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Transmitted audio per attempt          | 30 s                     | The instrumented provider counts the bytes it sends and refuses to exceed the ceiling                                           |
+| Cumulative transmitted audio           | 90 s                     | The local attempt ledger, across process invocations                                                                            |
+| Cumulative estimated charge            | USD 0.01                 | The local attempt ledger, across process invocations                                                                            |
+| Attempts                               | 3                        | The local attempt ledger, across process invocations                                                                            |
+| Provider handshake                     | 10 s                     | The production Muse adapter                                                                                                     |
+| Provider finalization drain            | 15 s                     | The production Muse adapter                                                                                                     |
+| Session watchdog                       | 60 s by default          | The runner, as the operation limit                                                                                              |
+| Connection and finalization allowances | 15 s and 15 s by default | The runner only. These are watchdog allowances that must cover the adapter boundaries. They are not separate provider timeouts. |
+
+The attempt ledger lives in a local ignored directory. Every attempt
+records its owner authorization reference, the transmitted seconds, the
+estimated charge, the fixture checksum, and the trace path. A command
+line flag alone is not an authorization: the run is refused when the
+recorded cumulative usage would exceed a ceiling.
