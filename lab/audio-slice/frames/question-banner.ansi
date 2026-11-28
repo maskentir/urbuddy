@@ -1,0 +1,26 @@
+[1mUrbuddy · alur tunggal · bukan sesi P01[22m
+[1mIkuti · 01:40 · jeda[22m
+[90mIkuti arti Indonesia. R membuka bantuan respons. C memulihkan konteks yang terlewat. ?[39m
+[90m bantuan.[39m
+[33mPertanyaan: Amara menanyakan apakah rebuild boleh jalan malam ini. (Belum jelas: Jonas[39m
+[33m atau Priya.) R untuk respons.[39m
+
+[90m00:59 · Priya · SRE[39m
+API membatasi laju kita. Kita menunggu acak sebelum mencoba lagi.
+[36mKata: throttle = API membatasi laju; backoff with jitter = tunggu acak sebelum mencoba[39m
+[36m lagi[39m
+[36mMaksud: Priya explains the delay is rate-limiting, not missing data.[39m
+
+[90m01:19 · Jonas · backend engineer[39m
+Kursor di offset sembilan. Bukan, kursor kedaluwarsa, jalankan probe baru.
+[36mKata: offset = posisi; probe = uji cepat[39m
+[36mMaksud: Jonas corrects himself; the first reading was wrong.[39m
+
+[90m01:36 · Amara · PM[39m
+Jonas or Priya, can we run the rebuild tonight?
+[90mBelum ada terjemahan.[39m
+
+
+
+
+[90mSpace jeda/lanjut · C pulihkan · R respons · ? bantuan · q keluar[39m

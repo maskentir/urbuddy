@@ -1,0 +1,54 @@
+{
+  "sampleRate": 16000,
+  "audioMs": 208000,
+  "spans": {
+    "opening-1": {
+      "startMs": 5000,
+      "durationMs": 3948
+    },
+    "opening-2": {
+      "startMs": 18000,
+      "durationMs": 4137
+    },
+    "join": {
+      "startMs": 30000,
+      "durationMs": 4655
+    },
+    "cursor": {
+      "startMs": 42000,
+      "durationMs": 5187
+    },
+    "throttle": {
+      "startMs": 58000,
+      "durationMs": 4540
+    },
+    "cursor-fix": {
+      "startMs": 78000,
+      "durationMs": 5432
+    },
+    "window-question": {
+      "startMs": 95000,
+      "durationMs": 3041
+    },
+    "window-clarify": {
+      "startMs": 108000,
+      "durationMs": 3209
+    },
+    "go-question": {
+      "startMs": 120000,
+      "durationMs": 3708
+    },
+    "watermark": {
+      "startMs": 145000,
+      "durationMs": 5595
+    },
+    "cursor-probe": {
+      "startMs": 182000,
+      "durationMs": 2474
+    },
+    "closing-line": {
+      "startMs": 196000,
+      "durationMs": 4459
+    }
+  }
+}

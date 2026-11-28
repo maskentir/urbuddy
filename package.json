@@ -26,6 +26,10 @@
     "ink-smoke": "tsx src/bootstrap/main.ts --ink-smoke",
     "smoke:transcribe": "node tooling/smoke-transcribe.mjs",
     "brand": "node tooling/generate-brand.mjs",
+    "lab:audio-slice": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/run.tsx",
+    "lab:audio-slice:test": "vitest run --config lab/audio-slice/vitest.config.ts",
+    "lab:audio-slice:capture": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/capture.tsx",
+    "lab:audio-slice:reference": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/tools/capture-reference.ts",
     "doctor": "tsx src/bootstrap/main.ts doctor --json",
     "prebuild": "rm -rf dist"
   },

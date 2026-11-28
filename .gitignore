@@ -9,3 +9,5 @@ evaluation/language/results/
 .env
 .env.*
 !.env.example
+lab/audio-slice/audio/*.wav
+lab/audio-slice/qualification/audio/*.wav
