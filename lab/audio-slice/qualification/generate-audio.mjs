@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { format, resolveConfig } from "prettier";
+
 const ROOT = join(tmpdir(), "urbuddy-muse-qualification");
 const OUT_DIR = join(new URL(".", import.meta.url).pathname, "audio");
 const SAMPLE_RATE = 16000;
@@ -95,12 +97,17 @@ for (let i = 0; i < totalSamples; i += 1) {
   pcm.writeInt16LE(Math.round(clamped * 32767), i * 2);
 }
 writeFileSync(join(OUT_DIR, "qualification.wav"), Buffer.concat([header, pcm]));
+const manifestPath = join(OUT_DIR, "manifest.json");
 writeFileSync(
-  join(OUT_DIR, "manifest.json"),
-  JSON.stringify(
-    { sampleRate: SAMPLE_RATE, audioMs, spans, turns: reference.turns.map((t) => t.id) },
-    null,
-    2,
+  manifestPath,
+  await format(
+    JSON.stringify({
+      sampleRate: SAMPLE_RATE,
+      audioMs,
+      spans,
+      turns: reference.turns.map((t) => t.id),
+    }),
+    { ...(await resolveConfig(manifestPath)), filepath: manifestPath },
   ),
 );
 process.stdout.write(

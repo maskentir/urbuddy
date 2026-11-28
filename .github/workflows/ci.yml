@@ -53,4 +53,5 @@ jobs:
       - run: node dist/bootstrap/main.js capture --synthetic-frames 200 --duration 30 --allow-child
       - run: node dist/bootstrap/main.js capture --synthetic-frames 5 --duration 10 --allow-child --json
       - run: node lab/audio-slice/tools/generate-audio.mjs
+      - run: pnpm lab:muse-qualification:fixture
       - run: pnpm lab:audio-slice:test

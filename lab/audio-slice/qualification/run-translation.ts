@@ -239,28 +239,59 @@ const engine = new ComprehensionEngine({
 });
 holder.engine = engine;
 
-for (const event of captured) {
-  const canonical: TranscriptEvent =
-    event.kind === "discontinuity"
-      ? {
-          type: "discontinuity",
-          reason: event.reason === "reconnect" ? "reconnect" : "capture-gap",
-          detail: event.detail ?? "",
-        }
-      : {
-          type: "final",
-          utteranceId: event.utteranceId,
-          revision: event.revision,
-          text: event.text,
-        };
-  engine.ingest(canonical);
-  if (event.kind !== "discontinuity") {
-    feed.ingestCanonicalEvent(canonical, 0);
-    await feed.idle();
+let signalExitCode: number | undefined;
+const cancel = (code: number): void => {
+  signalExitCode ??= code;
+  controller.abort();
+};
+const interrupt = (): void => cancel(130);
+const terminate = (): void => cancel(143);
+process.on("SIGINT", interrupt);
+process.on("SIGTERM", terminate);
+
+let summary: Awaited<ReturnType<ComprehensionEngine["finish"]>>;
+try {
+  try {
+    for (const event of captured) {
+      if (controller.signal.aborted || feed.fatal !== undefined) break;
+      const canonical: TranscriptEvent =
+        event.kind === "discontinuity"
+          ? {
+              type: "discontinuity",
+              reason: event.reason === "reconnect" ? "reconnect" : "capture-gap",
+              detail: event.detail ?? "",
+            }
+          : {
+              type: "final",
+              utteranceId: event.utteranceId,
+              revision: event.revision,
+              text: event.text,
+            };
+      engine.ingest(canonical);
+      if (event.kind !== "discontinuity") {
+        feed.ingestCanonicalEvent(canonical, 0);
+        await feed.idle();
+      }
+    }
+  } catch (error) {
+    controller.abort();
+    throw error;
+  } finally {
+    summary = await engine.finish();
   }
+} finally {
+  feed.finish();
+  await feed.completion();
+  process.off("SIGINT", interrupt);
+  process.off("SIGTERM", terminate);
 }
 
-const summary = await engine.finish();
+const settlementFailed =
+  feed.fatal !== undefined ||
+  summary.unresolvedInvocations > 0 ||
+  summary.unresolvedPublication ||
+  summary.publicationFailures > 0;
+process.exitCode = settlementFailed ? 1 : (signalExitCode ?? 0);
 
 const cases = (
   JSON.parse(readFileSync(join(EVALUATION_DIR, "development.json"), "utf8")) as {
@@ -270,6 +301,12 @@ const cases = (
 
 const lines: string[] = [];
 lines.push("translation-only qualification");
+lines.push(
+  `shutdown: code=${process.exitCode} unresolved=${summary.unresolvedInvocations} ` +
+    `unresolvedPublication=${summary.unresolvedPublication} publicationFailures=${summary.publicationFailures}`,
+);
+if (feed.fatal !== undefined)
+  lines.push(`runtime failure: ${feed.fatal.code}: ${feed.fatal.message}`);
 lines.push(`authorization: ${values.authorization}`);
 lines.push(`scope: ${requiredScope}`);
 lines.push(
