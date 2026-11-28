@@ -6,6 +6,7 @@ import type {
   SpeechProviderEvent,
   SpeechSession,
 } from "@modules/perception/speech";
+import type { CaptionSnapshot } from "@modules/session/captions";
 import { createTranscribePort } from "@presentation/transcribe";
 import { err, ok, type Result } from "neverthrow";
 import { describe, expect, it } from "vitest";
@@ -362,5 +363,100 @@ describe("transcribe port with translation", () => {
     } else {
       expect.unreachable();
     }
+  });
+});
+
+it("projects a capture gap and restarts translation context at the discontinuity", async () => {
+  const firstCaption = Promise.withResolvers<void>();
+  const gapVisible = Promise.withResolvers<void>();
+  const snapshots: CaptionSnapshot[] = [];
+  const contexts: string[][] = [];
+  const source = wavSource();
+  const indexedSource: CaptureSource = {
+    ...source,
+    async *items(): AsyncIterable<SourceItem> {
+      yield { type: "format", seq: 0, format: { sampleRate: 24_000, channels: 1 } };
+      yield { type: "audio", chunk: { seq: 1, startSample: 0, samples: new Float32Array(480) } };
+      await firstCaption.promise;
+      yield { type: "audio", chunk: { seq: 2, startSample: 960, samples: new Float32Array(480) } };
+      yield {
+        type: "end",
+        seq: 3,
+        end: { captured: 3, delivered: 2, dropped: 1, reason: "completed", sourceFrames: 1_440 },
+      };
+    },
+  };
+  const provider = fakeSpeech([]);
+  const port = createTranscribePort({
+    clock: { now: () => 0, isoNow: () => "" },
+    loopbackEndpoint: true,
+    translationLoopbackEndpoint: true,
+    createProvider: () =>
+      ok({
+        ...provider,
+        openSession: async () =>
+          ok({
+            ...scriptedSession([]),
+            async *events(): AsyncIterable<SpeechProviderEvent> {
+              yield {
+                type: "completed",
+                turnRef: "before",
+                text: "Crate nineteen stays.",
+                audioProcessedMs: 10,
+              };
+              await gapVisible.promise;
+              yield {
+                type: "completed",
+                turnRef: "after",
+                text: "Hold the gate.",
+                audioProcessedMs: 30,
+              };
+            },
+          }),
+      }),
+    openWav: async () => ok(indexedSource),
+    createTranslator: () =>
+      ok({
+        providerId: "loopback",
+        modelId: "fixture",
+        translate: async ({ messages }) => {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as { context: string[] };
+          contexts.push(payload.context);
+          return ok({ text: "Terjemahan contoh." });
+        },
+      }),
+    openTerminal: () => ({
+      update: (snapshot) => {
+        snapshots.push(snapshot);
+        if (snapshot.rows.length > 0) firstCaption.resolve();
+        if (snapshot.gaps > 0) gapVisible.resolve();
+      },
+      close: async () => undefined,
+    }),
+  });
+
+  const outcome = await port({
+    file: "synthetic.wav",
+    mode: "endpointing",
+    keywords: [],
+    translate: true,
+    json: false,
+    interactive: true,
+    signal: new AbortController().signal,
+    output: { out: () => undefined, errLine: () => undefined },
+  });
+  expect(outcome.isOk()).toBe(true);
+  expect(contexts).toEqual([[], []]);
+  expect(snapshots.at(-1)).toMatchObject({
+    gaps: 1,
+    lastGap: expect.stringContaining("capture-gap"),
+    status: "completed",
+    rows: [
+      expect.objectContaining({ text: "Crate nineteen stays." }),
+      expect.objectContaining({
+        text: "Hold the gate.",
+        translation: expect.objectContaining({ uncertain: true }),
+      }),
+    ],
   });
 });

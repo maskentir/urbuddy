@@ -1,12 +1,5 @@
-import { err, ok, type Result } from "neverthrow";
-
-import { appError, type AppError } from "../../../src/kernel/errors.js";
-import type {
-  TranslationProvider,
-  TranslationRequest,
-  TranslationResult,
-  TranslationUsage,
-} from "../../../src/modules/language/translation.js";
+import { boundTranslationProvider } from "../../../src/modules/language/budget.js";
+import type { TranslationProvider } from "../../../src/modules/language/translation.js";
 
 export interface TranslationBudget {
   readonly maxRequests: number;
@@ -48,35 +41,9 @@ export function createBudgetedProvider(
   budget: TranslationBudget,
   onRefusal: (refusal: BudgetRefusal) => void,
 ): TranslationProvider {
-  let requests = 0;
-  return {
-    providerId: provider.providerId,
-    modelId: provider.modelId,
-    translate: async (
-      request: TranslationRequest,
-    ): Promise<Result<TranslationResult, AppError & { readonly usage?: TranslationUsage }>> => {
-      if (requests + 1 > budget.maxRequests) {
-        const reason = `cumulative request ceiling of ${budget.maxRequests} reached`;
-        onRefusal({ reason, requests });
-        return err(appError("CONFIG_INVALID", reason));
-      }
-      const serialized = request.messages
-        .map((message) => `${message.role}:${message.content}`)
-        .join("\n");
-      const bytes = Buffer.byteLength(serialized, "utf8");
-      if (bytes > budget.maxInputBytesPerRequest) {
-        const reason = `serialized request of ${bytes} bytes exceeds the ${budget.maxInputBytesPerRequest} byte ceiling`;
-        onRefusal({ reason, requests });
-        return err(appError("CONFIG_INVALID", reason));
-      }
-      requests += 1;
-      const result = await provider.translate(request);
-      if (result.isErr()) {
-        return result;
-      }
-      return ok(result.value);
-    },
-  };
+  return boundTranslationProvider(provider, budget, (reason, requests) =>
+    onRefusal({ reason, requests }),
+  );
 }
 
 export interface LimitCheck {

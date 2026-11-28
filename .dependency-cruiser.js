@@ -15,6 +15,12 @@ export default {
       to: { couldNotResolve: true },
     },
     {
+      name: "production-does-not-depend-on-lab",
+      severity: "error",
+      from: { path: "^src/" },
+      to: { path: "^lab/" },
+    },
+    {
       name: "not-to-dev",
       severity: "error",
       comment: "Production code must not depend on devDependencies.",
@@ -102,7 +108,7 @@ export default {
   ],
   options: {
     doNotFollow: { path: "node_modules" },
-    includeOnly: "^src",
+    includeOnly: "^(src|lab)/",
     tsConfig: { fileName: "tsconfig.json" },
     tsPreCompilationDeps: true,
     webpackConfig: { fileName: "webpack.cruise.cjs" },

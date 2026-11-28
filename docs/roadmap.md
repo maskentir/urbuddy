@@ -117,6 +117,11 @@ honest degradation indicators.
 
 Dependencies: Live Language Engine.
 
+The owner approved experimental implementation before Milestone 4
+semantic qualification completes under `OWNER-M5-2026-11-28`. Both
+milestones retain their acceptance gates. See the
+[production convergence plan](./qualification/production-convergence-plan.md).
+
 Scope: bilingual streaming panels, keyboard navigation, history,
 session diagnostics.
 

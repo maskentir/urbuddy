@@ -1,7 +1,17 @@
 # Milestone 5 production convergence plan
 
-Date: 2026-11-28. Status: plan only. No implementation is authorised and
-no code in this document has been written.
+Date: 2026-11-28. Status: experimental implementation authorized.
+
+The project owner approved the implementation-order exception under
+`OWNER-M5-2026-11-28`, from master
+`ef5e212836de56736380eb4de41b094b42cfdf09`. Milestone 4 semantic
+qualification remains open. All existing acceptance criteria and
+release gates apply to both milestones. The decision grants permission
+to implement Milestone 5 experimentally before Milestone 4 completes.
+Verification uses synthetic data and local loopback. Paid requests,
+private meeting capture, and private transmission require separate
+authorization. This decision confers no qualification or production
+readiness status.
 
 The objective is the smallest path that promotes the accepted Adaptive
 Single Flow design into the existing production application, without the

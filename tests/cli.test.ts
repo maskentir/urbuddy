@@ -286,3 +286,11 @@ describe("version contract", () => {
     expect(URBUDDY_VERSION).toBe(pkg.version);
   });
 });
+
+it("rejects machine output combined with the interactive terminal", async () => {
+  const output = capture();
+  await expect(
+    runCli(["node", "urbuddy", "transcribe", "--interactive", "--json"], testDeps(), output.output),
+  ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  expect(output.lines).toEqual([]);
+});

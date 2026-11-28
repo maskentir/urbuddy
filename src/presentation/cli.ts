@@ -271,6 +271,7 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
     .option("--mode <mode>", "recognition mode (endpointing or diarization)", "endpointing")
     .option("--keywords <terms>", "comma-separated vocabulary biasing terms")
     .option("--json", "emit one stable JSON object per line", false)
+    .option("--interactive", "open the experimental terminal caption view", false)
     .option(
       "--translate",
       "translate finalized speech experimentally (requires --allow-egress)",
@@ -289,12 +290,16 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
         mode: string;
         keywords?: string;
         json: boolean;
+        interactive: boolean;
         translate: boolean;
         sourceLanguage?: string;
         targetLanguage?: string;
         translationProvider?: string;
         translationModel?: string;
       }) => {
+        if (options.interactive && options.json) {
+          throw appError("VALIDATION_FAILED", "--interactive cannot be combined with --json");
+        }
         if (deps.transcribePort === undefined) {
           throw new Error("transcribe is not wired");
         }
@@ -328,6 +333,7 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
           mode: options.mode,
           keywords,
           json: options.json,
+          ...(options.interactive ? { interactive: true } : {}),
           translate: options.translate,
           ...(options.provider === undefined ? {} : { sttProvider: options.provider }),
           ...(options.sttModel === undefined ? {} : { sttModel: options.sttModel }),
@@ -350,6 +356,11 @@ export function createProgram(deps: CliDeps, providedOutput?: CliOutput): Comman
         };
         const result = await deps.transcribePort(transcribeInput);
         if (result.isErr()) {
+          if (
+            result.error.code === "CANCELLED" &&
+            result.error.details?.["terminalStop"] === "true"
+          )
+            return;
           throw result.error;
         }
       },

@@ -5,6 +5,7 @@ import {
   type TranslationConfig,
   type TranslationFlags,
 } from "@modules/config/translation";
+import { boundTranslationProvider } from "@modules/language/budget";
 import {
   TranslationScheduler,
   type TranslationEvent,
@@ -19,10 +20,14 @@ import {
   type TranscriptEvent,
   type TranscriptionSummary,
 } from "@modules/perception/speech";
+import { CaptionHistory, type CaptionSnapshot } from "@modules/session/captions";
+import { acceptedTranscript } from "@modules/session/events";
+import { SessionAdmission } from "@modules/session/runtime";
 import { stripFormatting } from "@platform/output";
 import { err, ok, type Result } from "neverthrow";
 
 import type { CliOutput } from "./output.js";
+import type { TerminalHandle } from "./terminal.js";
 
 export interface TranscribeInput {
   readonly file?: string;
@@ -30,6 +35,7 @@ export interface TranscribeInput {
   readonly mode: SpeechMode;
   readonly keywords: readonly string[];
   readonly json: boolean;
+  readonly interactive?: boolean;
   readonly translate: boolean;
   readonly translationFlags?: TranslationFlags;
   readonly signal: AbortSignal;
@@ -48,6 +54,12 @@ export type TranscribePort = (
 
 export interface TranscribeDeps {
   readonly clock: Clock;
+  readonly sessionId?: string;
+  readonly openTerminal?: (
+    initial: CaptionSnapshot,
+    stop: () => void,
+    cancel: () => void,
+  ) => TerminalHandle;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly loopbackEndpoint: boolean;
   readonly translationLoopbackEndpoint: boolean;
@@ -96,7 +108,15 @@ function formatTranslationSummary(summary: TranslationSummary): string {
 
 export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
   return async (input) => {
-    const { createProvider, openWav, spawnCapture } = deps;
+    const { createProvider, openWav, spawnCapture, openTerminal } = deps;
+    if (input.interactive === true && (input.json || openTerminal === undefined)) {
+      return err(
+        appError(
+          "VALIDATION_FAILED",
+          "interactive transcription requires terminal input and output without --json",
+        ),
+      );
+    }
     if (input.signal.aborted) {
       return err(appError("CANCELLED", "transcription cancelled"));
     }
@@ -138,8 +158,20 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
         ),
       );
     }
+    const stop = new AbortController();
+    const signal = AbortSignal.any([input.signal, stop.signal]);
     const translationController = new AbortController();
-    const translationSignal = AbortSignal.any([input.signal, translationController.signal]);
+    const translationSignal = AbortSignal.any([signal, translationController.signal]);
+    const captions =
+      input.interactive === true ? new CaptionHistory(translationConfig.enabled) : undefined;
+    let terminal: TerminalHandle | undefined;
+    const refresh = (): void => {
+      if (captions !== undefined) terminal?.update(captions.snapshot());
+    };
+    let stopped = false;
+    const admission = new SessionAdmission();
+    let sequence = 0;
+    const startedAt = deps.clock.now();
     let scheduler: TranslationScheduler | undefined;
     async function fail(error: AppError): Promise<Result<BilingualSummary, AppError>> {
       translationController.abort();
@@ -150,6 +182,8 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           cleanup.unresolvedPublication ||
           cleanup.publicationFailures > 0)
       ) {
+        captions?.setStatus("failed", "translation cleanup incomplete");
+        refresh();
         return err(
           appError(error.code, `${error.message}; translation cleanup incomplete`, {
             ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
@@ -164,6 +198,18 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
             },
           }),
         );
+      }
+      if (error.code === "CANCELLED" && error.details?.["cleanup"] === undefined) {
+        captions?.setStatus("stopped");
+        refresh();
+        if (stopped && !input.signal.aborted) {
+          return err(
+            appError("CANCELLED", "session stopped", { details: { terminalStop: "true" } }),
+          );
+        }
+      } else {
+        captions?.setStatus("failed", error.message);
+        refresh();
       }
       return err(error);
     }
@@ -182,16 +228,21 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
           ),
         );
         scheduler = new TranslationScheduler({
-          provider: created.value,
+          provider: boundTranslationProvider(created.value),
           languages: translationConfig,
           signal: translationSignal,
           onEvent: async (event, isCurrent) => {
             if (!isCurrent()) {
               return false;
             }
-            await input.output.out(
-              input.json ? JSON.stringify(event) : stripFormatting(formatTranslationEvent(event)),
-            );
+            if (captions !== undefined) {
+              captions.publish(event);
+              refresh();
+            } else {
+              await input.output.out(
+                input.json ? JSON.stringify(event) : stripFormatting(formatTranslationEvent(event)),
+              );
+            }
             return true;
           },
         });
@@ -202,6 +253,25 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
       }
       if (input.signal.aborted) {
         return await fail(appError("CANCELLED", "transcription cancelled"));
+      }
+      if (input.file === undefined) {
+        await input.output.errLine(
+          stripFormatting(
+            "disclosure: system-wide macOS audio will be sent to the selected cloud speech provider (Meta Muse). No audio is stored by urbuddy.",
+          ),
+        );
+      }
+      if (signal.aborted) return await fail(appError("CANCELLED", "transcription cancelled"));
+      if (captions !== undefined) {
+        terminal = openTerminal?.(
+          captions.snapshot(),
+          () => {
+            if (signal.aborted) return;
+            stopped = true;
+            stop.abort();
+          },
+          () => stop.abort(),
+        );
       }
       let source: CaptureSource;
       if (input.file !== undefined) {
@@ -217,14 +287,6 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
         }
         source = opened.value;
       } else {
-        await input.output.errLine(
-          stripFormatting(
-            "disclosure: system-wide macOS audio will be sent to the selected cloud speech provider (Meta Muse). No audio is stored by urbuddy.",
-          ),
-        );
-        if (input.signal.aborted) {
-          return await fail(appError("CANCELLED", "transcription cancelled"));
-        }
         if (spawnCapture === undefined) {
           return await fail(
             appError(
@@ -240,11 +302,29 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
         source = spawned.value;
       }
       const onEvent = async (event: TranscriptEvent): Promise<void> => {
-        if (event.type === "progress") {
-          return;
+        if (signal.aborted || event.type === "progress") return;
+        if (event.type === "discontinuity") {
+          scheduler?.consume(event);
+          captions?.gap(`${event.reason}: ${event.detail}`);
+        } else {
+          const { output } = admission.accept({
+            sessionId: deps.sessionId ?? "transcribe",
+            streamId: "speech",
+            seq: sequence++,
+            kind: event.type,
+            utteranceId: event.utteranceId,
+            revision: event.revision,
+            text: event.text,
+          });
+          if (output.isErr()) throw output.error;
+          const accepted = acceptedTranscript(output.value, event);
+          if (accepted === undefined) return;
+          captions?.accept(output.value, deps.clock.now() - startedAt);
+          scheduler?.consume(accepted);
         }
-        scheduler?.consume(event);
-        if (input.json) {
+        if (captions !== undefined) {
+          refresh();
+        } else if (input.json) {
           await input.output.out(JSON.stringify(event));
         } else {
           await input.output.out(stripFormatting(formatEvent(event)));
@@ -253,10 +333,18 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
       const outcome = await runTranscription({
         source,
         provider: provider.value,
-        signal: input.signal,
+        signal,
         mode: input.mode,
         keywords: input.keywords,
         onEvent,
+        ...(captions === undefined
+          ? {}
+          : {
+              onFormat: async () => {
+                captions.setStatus("running");
+                refresh();
+              },
+            }),
         ...(input.file === undefined && input.durationMs !== undefined
           ? { durationMs: input.durationMs }
           : {}),
@@ -264,15 +352,34 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
       if (outcome.isErr()) {
         return await fail(outcome.error);
       }
+      captions?.setStatus("settling");
+      refresh();
       const translation = await scheduler?.finish();
-      if (translation !== undefined) {
+      if (signal.aborted) return await fail(appError("CANCELLED", "transcription cancelled"));
+      if (
+        captions !== undefined &&
+        translation !== undefined &&
+        (translation.unresolvedInvocations > 0 ||
+          translation.unresolvedPublication ||
+          translation.publicationFailures > 0)
+      ) {
+        return await fail(appError("INTERNAL", "terminal session cleanup failed"));
+      }
+      if (captions !== undefined) {
+        const detail =
+          translation?.failed === true
+            ? formatTranslationSummary(translation)
+            : `Final: ${outcome.value.finals} · Parsial: ${outcome.value.partials}`;
+        captions.setStatus("completed", detail);
+        refresh();
+      } else if (translation !== undefined) {
         if (input.json) {
           await input.output.out(JSON.stringify({ type: "translation-complete", ...translation }));
         } else {
           await input.output.out(stripFormatting(formatTranslationSummary(translation)));
         }
       }
-      if (input.json) {
+      if (captions === undefined && input.json) {
         await input.output.out(
           JSON.stringify({
             type: "complete",
@@ -280,7 +387,7 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
             ...(translation === undefined ? {} : { translation }),
           }),
         );
-      } else {
+      } else if (captions === undefined) {
         await input.output.out(
           stripFormatting(
             `transcription complete: provider=${outcome.value.providerId} model=${outcome.value.modelId} finals=${outcome.value.finals} partials=${outcome.value.partials} discontinuities=${outcome.value.discontinuities}`,
@@ -293,6 +400,8 @@ export function createTranscribePort(deps: TranscribeDeps): TranscribePort {
       });
     } catch (thrown: unknown) {
       return await fail(toAppError(thrown, "transcription failed"));
+    } finally {
+      await terminal?.close();
     }
   };
 }

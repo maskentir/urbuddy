@@ -1,4 +1,7 @@
-import type { TranslationEvent } from "../../src/modules/language/translation.js";
+import {
+  translationMatchesRevision,
+  type TranslationEvent,
+} from "../../src/modules/language/translation.js";
 import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
 import type { SessionOutput } from "../../src/modules/session/events.js";
 
@@ -234,6 +237,20 @@ export function applyTranscriptDetail(state: DomainState, event: TranscriptEvent
 }
 
 export function applyTranslation(state: DomainState, event: TranslationEvent): void {
+  const current = state.byKey.get(event.sourceUtteranceId);
+  if (
+    current !== undefined &&
+    !translationMatchesRevision(event, current.revision, current.translation?.state)
+  ) {
+    if (event.sourceRevision !== current.revision) {
+      state.translationsRejected += 1;
+      state.rejected.push({
+        kind: "translation",
+        reason: `mismatched revision ${event.sourceRevision} for ${event.sourceUtteranceId}`,
+      });
+    }
+    return;
+  }
   if (event.type === "degraded") {
     const degraded = state.byKey.get(event.sourceUtteranceId);
     if (degraded !== undefined) {
@@ -268,21 +285,6 @@ export function applyTranslation(state: DomainState, event: TranslationEvent): v
     state.rejected.push({
       kind: "translation",
       reason: `unknown utterance ${event.sourceUtteranceId}`,
-    });
-    return;
-  }
-  if (event.sourceRevision < target.revision) {
-    state.translationsRejected += 1;
-    state.rejected.push({
-      kind: "translation",
-      reason: `stale revision ${event.sourceRevision} < ${target.revision} for ${event.sourceUtteranceId}`,
-    });
-    return;
-  }
-  if (target.translation?.state === "committed" && event.type === "provisional") {
-    state.rejected.push({
-      kind: "translation",
-      reason: `provisional for ${event.sourceUtteranceId} arrived after a committed translation`,
     });
     return;
   }

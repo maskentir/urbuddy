@@ -165,18 +165,7 @@ export class SessionRuntime {
     if (signal !== undefined && signal.aborted) {
       return err(appError("CANCELLED", "replay cancelled before start"));
     }
-    let adopted: { sessionId: string; streamId: string } | undefined;
-    let expectedSeq = 0;
-    let lastSeq = -1;
-    let lastSeqHash = "";
-    const utterances = new Map<string, TrackedUtterance>();
-    const counts: ReplayCounts = {
-      applied: 0,
-      duplicates: 0,
-      stale: 0,
-      gaps: 0,
-      missing: 0,
-    };
+    const admission = new SessionAdmission(bounds);
     for (;;) {
       if (signal !== undefined && signal.aborted) {
         return err(cancelled());
@@ -188,104 +177,136 @@ export class SessionRuntime {
       if (next.done === true) {
         break;
       }
-      const parsed = streamEventSchema.safeParse(next.value);
-      if (!parsed.success) {
-        return err(
+      const { gap, output } = admission.accept(next.value);
+      if (gap !== undefined) {
+        await sink(gap);
+        if (signal?.aborted === true) return err(cancelled());
+      }
+      if (output.isErr()) return err(output.error);
+      await sink(output.value);
+    }
+    if (signal?.aborted === true) return err(cancelled());
+    const summary = admission.summary();
+    return summary === undefined ? err(invalid("replay fixture contains no events")) : ok(summary);
+  }
+}
+
+export class SessionAdmission {
+  private identity: { sessionId: string; streamId: string } | undefined;
+  private expectedSeq = 0;
+  private lastSeq = -1;
+  private lastSeqHash = "";
+  private readonly utterances = new Map<string, TrackedUtterance>();
+  private readonly counts: ReplayCounts = {
+    applied: 0,
+    duplicates: 0,
+    stale: 0,
+    gaps: 0,
+    missing: 0,
+  };
+
+  constructor(
+    private readonly bounds: ReplayBounds = {
+      maxUtterances: DEFAULT_MAX_UTTERANCES,
+      maxTextBytes: DEFAULT_MAX_TEXT_BYTES,
+      maxIdBytes: DEFAULT_MAX_ID_BYTES,
+    },
+  ) {}
+
+  accept(raw: unknown): {
+    readonly gap?: Extract<SessionOutput, { type: "gap" }>;
+    readonly output: Result<SessionOutput, AppError>;
+  } {
+    const parsed = streamEventSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        output: err(
           appError("VALIDATION_FAILED", "replay event failed validation", {
             details: {
               issues: parsed.error.issues.map((issue) => issue.message).join("; "),
             },
           }),
-        );
-      }
-      const event = parsed.data;
-      if (
-        byteLength(event.sessionId) > bounds.maxIdBytes ||
-        byteLength(event.streamId) > bounds.maxIdBytes ||
-        byteLength(event.utteranceId) > bounds.maxIdBytes
-      ) {
-        return err(invalid("replay event identifier exceeds the size bound"));
-      }
-      if (byteLength(event.text) > bounds.maxTextBytes) {
-        return err(invalid("replay event text exceeds the size bound"));
-      }
-      if (adopted === undefined) {
-        adopted = { sessionId: event.sessionId, streamId: event.streamId };
-      } else if (event.sessionId !== adopted.sessionId || event.streamId !== adopted.streamId) {
-        return err(invalid("replay event identity mismatch"));
-      }
-      if (event.seq < expectedSeq) {
-        if (event.seq === lastSeq) {
-          if (hashEvent(event) !== lastSeqHash) {
-            return err(invalid("contradictory replay event"));
-          }
-          counts.duplicates += 1;
-          await sink({
+        ),
+      };
+    }
+    const event = parsed.data;
+    if (
+      byteLength(event.sessionId) > this.bounds.maxIdBytes ||
+      byteLength(event.streamId) > this.bounds.maxIdBytes ||
+      byteLength(event.utteranceId) > this.bounds.maxIdBytes
+    ) {
+      return { output: err(invalid("replay event identifier exceeds the size bound")) };
+    }
+    if (byteLength(event.text) > this.bounds.maxTextBytes) {
+      return { output: err(invalid("replay event text exceeds the size bound")) };
+    }
+    if (this.identity === undefined) {
+      this.identity = { sessionId: event.sessionId, streamId: event.streamId };
+    } else if (
+      event.sessionId !== this.identity.sessionId ||
+      event.streamId !== this.identity.streamId
+    ) {
+      return { output: err(invalid("replay event identity mismatch")) };
+    }
+    if (event.seq < this.expectedSeq) {
+      if (event.seq === this.lastSeq) {
+        if (hashEvent(event) !== this.lastSeqHash) {
+          return { output: err(invalid("contradictory replay event")) };
+        }
+        this.counts.duplicates += 1;
+        return {
+          output: ok({
             type: "duplicate",
             seq: event.seq,
             utteranceId: event.utteranceId,
             revision: event.revision,
-          });
-          continue;
-        }
-        counts.stale += 1;
-        await sink({
+          }),
+        };
+      }
+      this.counts.stale += 1;
+      return {
+        output: ok({
           type: "stale",
           seq: event.seq,
           utteranceId: event.utteranceId,
           revision: event.revision,
           reason: "superseded",
-        });
-        continue;
-      }
-      if (event.seq > expectedSeq) {
-        counts.gaps += 1;
-        counts.missing += event.seq - expectedSeq;
-        await sink({ type: "gap", from: expectedSeq, to: event.seq });
-        if (signal !== undefined && signal.aborted) {
-          return err(cancelled());
-        }
-      }
-      lastSeq = event.seq;
-      lastSeqHash = hashEvent(event);
-      const applied = this.applyEvent(event, utterances, counts, bounds);
-      if (applied.isErr()) {
-        return err(applied.error);
-      }
-      await sink(applied.value);
-      expectedSeq = event.seq + 1;
+        }),
+      };
     }
-    if (signal !== undefined && signal.aborted) {
-      return err(cancelled());
+
+    const gap =
+      event.seq > this.expectedSeq
+        ? { type: "gap" as const, from: this.expectedSeq, to: event.seq }
+        : undefined;
+    if (gap !== undefined) {
+      this.counts.gaps += 1;
+      this.counts.missing += gap.to - gap.from;
     }
-    if (adopted === undefined) {
-      return err(invalid("replay fixture contains no events"));
-    }
-    return ok({
-      sessionId: adopted.sessionId,
-      streamId: adopted.streamId,
-      ...counts,
-    });
+    this.lastSeq = event.seq;
+    this.lastSeqHash = hashEvent(event);
+    const output = this.applyEvent(event);
+    this.expectedSeq = event.seq + 1;
+    return gap === undefined ? { output } : { gap, output };
   }
 
-  private applyEvent(
-    event: StreamEvent,
-    utterances: Map<string, TrackedUtterance>,
-    counts: ReplayCounts,
-    bounds: ReplayBounds,
-  ): Result<SessionOutput, AppError> {
+  summary(): ReplaySummary | undefined {
+    return this.identity === undefined ? undefined : { ...this.identity, ...this.counts };
+  }
+
+  private applyEvent(event: StreamEvent): Result<SessionOutput, AppError> {
     const contentHash = hashText(event.text);
-    const stored = utterances.get(event.utteranceId);
+    const stored = this.utterances.get(event.utteranceId);
     if (stored === undefined) {
-      if (utterances.size >= bounds.maxUtterances) {
+      if (this.utterances.size >= this.bounds.maxUtterances) {
         return err(invalid("session utterance capacity exceeded"));
       }
-      utterances.set(event.utteranceId, {
+      this.utterances.set(event.utteranceId, {
         revision: event.revision,
         contentHash,
         finalized: event.kind === "final",
       });
-      counts.applied += 1;
+      this.counts.applied += 1;
       return ok({
         type: "applied",
         sessionId: event.sessionId,
@@ -302,7 +323,7 @@ export class SessionRuntime {
       contentHash === stored.contentHash &&
       (event.kind === "final") === stored.finalized;
     if (identical) {
-      counts.duplicates += 1;
+      this.counts.duplicates += 1;
       return ok({
         type: "duplicate",
         seq: event.seq,
@@ -312,12 +333,12 @@ export class SessionRuntime {
     }
     if (event.revision === stored.revision) {
       if (!stored.finalized && event.kind === "final" && contentHash === stored.contentHash) {
-        utterances.set(event.utteranceId, {
+        this.utterances.set(event.utteranceId, {
           revision: event.revision,
           contentHash,
           finalized: true,
         });
-        counts.applied += 1;
+        this.counts.applied += 1;
         return ok({
           type: "applied",
           sessionId: event.sessionId,
@@ -332,7 +353,7 @@ export class SessionRuntime {
       return err(invalid("contradictory replay event"));
     }
     if (stored.finalized) {
-      counts.stale += 1;
+      this.counts.stale += 1;
       return ok({
         type: "stale",
         seq: event.seq,
@@ -342,7 +363,7 @@ export class SessionRuntime {
       });
     }
     if (event.revision < stored.revision) {
-      counts.stale += 1;
+      this.counts.stale += 1;
       return ok({
         type: "stale",
         seq: event.seq,
@@ -351,12 +372,12 @@ export class SessionRuntime {
         reason: "superseded",
       });
     }
-    utterances.set(event.utteranceId, {
+    this.utterances.set(event.utteranceId, {
       revision: event.revision,
       contentHash,
       finalized: event.kind === "final",
     });
-    counts.applied += 1;
+    this.counts.applied += 1;
     return ok({
       type: "applied",
       sessionId: event.sessionId,
