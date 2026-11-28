@@ -37,8 +37,8 @@ const EVALUATION_DIR = join(here, "..", "..", "..", "evaluation", "language", "c
 const MAX_REQUESTS_CEILING = 16;
 const MAX_INPUT_BYTES_CEILING = 16_000;
 const MAX_OUTPUT_TOKENS = 1_024;
-const FRAMING_ALLOWANCE_TOKENS = 256;
-const TOKEN_BUDGET_RATIO = 4;
+const FRAMING_ALLOWANCE_BYTES = 2_048;
+const ESTIMATED_BYTES_PER_TOKEN = 4;
 
 interface CapturedEvent {
   readonly utteranceId: string;
@@ -136,10 +136,11 @@ if (captured.length === 0) {
   fail("the captured trace carries no canonical transcript events.");
 }
 
-const worstCaseInputTokens =
-  maxRequests * Math.ceil(maxInputBytes / TOKEN_BUDGET_RATIO + FRAMING_ALLOWANCE_TOKENS);
+const worstCaseInputBytes = maxRequests * (maxInputBytes + FRAMING_ALLOWANCE_BYTES);
+const estimatedInputTokens = Math.ceil(worstCaseInputBytes / ESTIMATED_BYTES_PER_TOKEN);
 const worstCaseOutputTokens = maxRequests * MAX_OUTPUT_TOKENS;
-const worstCaseCostUsd = estimateCostUsd(model, worstCaseInputTokens, worstCaseOutputTokens) ?? 0;
+const planningEstimateUsd =
+  estimateCostUsd(model, estimatedInputTokens, worstCaseOutputTokens) ?? 0;
 const rate = TRANSLATION_RATES_PER_MILLION_TOKENS[model];
 if (rate === undefined) {
   fail(`no published rate is known for model ${model}.`);
@@ -151,7 +152,7 @@ const requiredScope = [
   `maxRequests=${maxRequests}`,
   `maxInputBytes=${maxInputBytes}`,
   `maxOutputTokens=${MAX_OUTPUT_TOKENS}`,
-  `maxCostUsd=${worstCaseCostUsd.toFixed(6)}`,
+  `planningEstimateUsd=${planningEstimateUsd.toFixed(6)}`,
 ].join(";");
 
 process.stdout.write(
@@ -162,15 +163,20 @@ process.stdout.write(
     `  captured canonical events=${captured.length}\n` +
     `  limits: ${maxRequests} requests, ${maxInputBytes} serialized input bytes per request, ` +
     `${MAX_OUTPUT_TOKENS} output tokens per request\n` +
-    `  conservative cost ceiling: ${worstCaseInputTokens} input and ${worstCaseOutputTokens} output ` +
-    `tokens = USD ${worstCaseCostUsd.toFixed(6)} at USD ${rate.input}/${rate.output} per million\n` +
+    `  enforceable limits: ${maxRequests} requests, ${maxInputBytes} serialized input bytes per ` +
+    `request plus ${FRAMING_ALLOWANCE_BYTES} framing bytes, ${MAX_OUTPUT_TOKENS} output tokens per request\n` +
+    `  planning estimate only: ${estimatedInputTokens} estimated input tokens (about ` +
+    `${ESTIMATED_BYTES_PER_TOKEN} bytes per token) and ${worstCaseOutputTokens} output tokens = ` +
+    `USD ${planningEstimateUsd.toFixed(6)} at USD ${rate.input}/${rate.output} per million. ` +
+    `This is an estimate, not a bound. The provider reports actual usage and confirmed billing.\n` +
     `  required authorization scope: ${requiredScope}\n`,
 );
 
 if (values["owner-authorized"] !== true || values.authorization === undefined) {
   fail(
     "a translation specific owner authorization, an authorization reference, and the exact " +
-      "authorization scope are required. The Muse authorization is not reused.",
+      "authorization scope are required. The Muse authorization is not reused. The runner cannot " +
+      "verify owner consent independently; it records the assertion the operator made.",
   );
 }
 if (values["authorization-scope"] !== requiredScope) {

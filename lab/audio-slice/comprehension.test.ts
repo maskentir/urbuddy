@@ -675,3 +675,90 @@ describe("qualification configuration gates", () => {
     expect(traceChecksumMatches("abc", "abc").accepted).toBe(true);
   });
 });
+
+describe("publication reaches the visible surface", () => {
+  const AUTHORED_INDONESIAN = "[fixture] Kunci cache dipegang worker ekspor.";
+
+  async function publish(onPublished: boolean): Promise<{
+    readonly publishedFrame: string | undefined;
+    readonly utteranceId: string;
+    readonly revision: number;
+  }> {
+    const stub = await startStubTranslation(() => ({
+      translation: AUTHORED_INDONESIAN,
+      delayMs: 120,
+    }));
+    try {
+      let publishedFrame: string | undefined;
+      const holder: { engine?: ComprehensionEngine } = {};
+      const feed = new RuntimeFeed({
+        sessionId: "publication",
+        streamId: "main",
+        provider: [],
+        authoredTranscripts: [],
+        translations: [],
+        intelligence: [],
+        gapSkips: [],
+        onOutput: (output) => {
+          holder.engine?.accept(output);
+        },
+      });
+      feed.start();
+      const engine = new ComprehensionEngine({
+        provider: createOpenAITranslationProvider({
+          apiKey: "stub",
+          testEndpoint: stub.url,
+          modelId: "gpt-6.1-terra",
+        }),
+        languages: { sourceLanguage: "en", targetLanguage: "id" },
+        signal: new AbortController().signal,
+        domain: feed.domain,
+        ...(onPublished
+          ? {
+              onPublished: () => {
+                publishedFrame = renderToString(
+                  React.createElement(AdaptiveScreen, {
+                    state: {
+                      domain: feed.domain,
+                      user: blankUser(),
+                      atMs: 0,
+                      running: false,
+                      assistanceEnabled: true,
+                    },
+                    size: { columns: 86, rows: 28 },
+                  }),
+                  { columns: 86 },
+                );
+              },
+            }
+          : {}),
+      });
+      holder.engine = engine;
+      const event = finalEvent("epoch-0-turn-1", 3, "The cache lock is held by the export worker.");
+      engine.ingest(event);
+      feed.ingestCanonicalEvent(event, 0);
+      await feed.idle();
+      await engine.finish();
+      const row = feed.domain.byKey.get("epoch-0-turn-1");
+      return {
+        publishedFrame,
+        utteranceId: row?.key ?? "",
+        revision: row?.revision ?? 0,
+      };
+    } finally {
+      await stub.close();
+    }
+  }
+
+  test("a delayed committed translation is visible without a later transcript", async () => {
+    const published = await publish(true);
+    expect(published.publishedFrame).toContain(AUTHORED_INDONESIAN);
+    expect(published.utteranceId).toBe("epoch-0-turn-1");
+    expect(published.revision).toBe(3);
+  });
+
+  test("without the publication notification the translation never reaches the surface", async () => {
+    const published = await publish(false);
+    expect(published.publishedFrame).toBeUndefined();
+  });
+});

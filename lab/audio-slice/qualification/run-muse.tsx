@@ -412,6 +412,7 @@ const holder: { session: Session } = {
   session: { ...initialSession(feed.domain), running: true, assistanceEnabled: false },
 };
 let finished = false;
+let shuttingDown = false;
 const finish = (code: number): void => {
   if (finished) return;
   finished = true;
@@ -656,15 +657,42 @@ const transcription = await runTranscription({
   },
 });
 
+const shutdown = async (code: number): Promise<void> => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearInterval(clockTimer);
+  operation.abort();
+  let unresolved = 0;
+  if (comprehension !== undefined) {
+    const settled = await comprehension.finish();
+    unresolved =
+      settled.unresolvedInvocations +
+      (settled.unresolvedPublication ? 1 : 0) +
+      settled.publicationFailures;
+    emit(
+      "translation-settlement",
+      `committed=${settled.committed} failed=${settled.failedInvocations} cancelled=${settled.cancelledInvocations} ` +
+        `unresolved=${settled.unresolvedInvocations} publicationFailures=${settled.publicationFailures}`,
+      {
+        committed: settled.committed,
+        failed: settled.failedInvocations,
+        cancelled: settled.cancelledInvocations,
+        unresolved: settled.unresolvedInvocations,
+        publicationFailures: settled.publicationFailures,
+      },
+    );
+  }
+  feed.finish();
+  await feed.completion();
+  finish(unresolved > 0 ? 1 : code);
+};
+
 if (transcription.isErr()) {
   emit("failure", `${transcription.error.code}: ${transcription.error.message}`, {
     code: transcription.error.code,
     message: transcription.error.message,
   });
-  feed.abort();
-  await feed.completion();
-  clearInterval(clockTimer);
-  finish(1);
+  await shutdown(1);
 } else {
   const summary = transcription.value;
   emit(
@@ -697,7 +725,6 @@ if (transcription.isErr()) {
           publicationMs: observation.publicationMs,
           observedMonoMs: observation.monoMs,
         },
-        observation.monoMs,
       );
     }
     emit(
@@ -726,9 +753,6 @@ if (transcription.isErr()) {
       },
     );
   }
-  feed.finish();
-  await feed.completion();
-  clearInterval(clockTimer);
   process.stdout.write(`\n${renderFrame()}\n`);
-  finish(0);
+  await shutdown(0);
 }
