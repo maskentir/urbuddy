@@ -105,6 +105,11 @@ export class ComprehensionEngine {
    * becomes translation work when the session runtime accepted it.
    */
   ingest(event: TranscriptEvent): void {
+    if (event.type === "discontinuity") {
+      this.scheduler.consume(event);
+      this.canonical.clear();
+      return;
+    }
     if (event.type === "partial" || event.type === "final") {
       this.canonical.set(event.utteranceId, event);
     }
@@ -118,6 +123,11 @@ export class ComprehensionEngine {
     if (candidate === undefined) {
       return;
     }
+    if (candidate.revision !== output.revision || candidate.type !== output.kind) {
+      this.canonical.delete(output.utteranceId);
+      return;
+    }
+    this.canonical.delete(output.utteranceId);
     this.consumed += 1;
     const row = this.options.domain.byKey.get(output.utteranceId);
     if (row !== undefined && candidate.type === "final") {

@@ -11,7 +11,11 @@ import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
 
 import { ComprehensionEngine } from "./comprehension.js";
 import { RuntimeFeed } from "./feed.js";
-import { createBudgetedProvider } from "./qualification/translation-budget.js";
+import {
+  createBudgetedProvider,
+  parseBoundedInteger,
+  traceChecksumMatches,
+} from "./qualification/translation-budget.js";
 import { AdaptiveScreen } from "./screen.js";
 import type { Session, UserState } from "./session.js";
 
@@ -548,5 +552,126 @@ describe("translation budget", () => {
     });
     expect(outcome.isErr()).toBe(true);
     expect(outbound).toBe(0);
+  });
+});
+
+describe("acceptance ordering and discontinuity", () => {
+  test("the broken runner ordering admits no translation work", async () => {
+    const stub = await startStubTranslation(() => ({ translation: "terjemahan" }));
+    try {
+      const feed = new RuntimeFeed({
+        sessionId: "broken",
+        streamId: "main",
+        provider: [],
+        authoredTranscripts: [],
+        translations: [],
+        intelligence: [],
+        gapSkips: [],
+      });
+      feed.start();
+      const controller = new AbortController();
+      const engine = new ComprehensionEngine({
+        provider: createOpenAITranslationProvider({
+          apiKey: "stub",
+          testEndpoint: stub.url,
+          modelId: "gpt-6.1-terra",
+        }),
+        languages: { sourceLanguage: "en", targetLanguage: "id" },
+        signal: controller.signal,
+        domain: feed.domain,
+      });
+      const event: TranscriptEvent = {
+        type: "final",
+        utteranceId: "epoch-0-turn-1",
+        revision: 1,
+        text: "The cache lock is held.",
+      };
+      feed.ingestCanonicalEvent(event, 0);
+      await feed.idle();
+      engine.ingest(event);
+      await engine.finish();
+      expect(stub.requests).toHaveLength(0);
+      expect(engine.acceptedEvents).toBe(0);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  test("a discontinuity clears the context so stale context is not reused", async () => {
+    const contexts: string[][] = [];
+    const stub = await startStubTranslation((_index, body) => {
+      const parsed = JSON.parse(JSON.stringify(body)) as {
+        messages: { role: string; content: string }[];
+      };
+      const user = parsed.messages.find((message) => message.role === "user");
+      const payload = JSON.parse(user?.content ?? "{}") as { context?: string[] };
+      contexts.push(payload.context ?? []);
+      return { translation: "terjemahan" };
+    });
+    try {
+      const holder: { engine?: ComprehensionEngine } = {};
+      const feed = new RuntimeFeed({
+        sessionId: "discontinuity",
+        streamId: "main",
+        provider: [],
+        authoredTranscripts: [],
+        translations: [],
+        intelligence: [],
+        gapSkips: [],
+        onOutput: (output) => {
+          holder.engine?.accept(output);
+        },
+      });
+      feed.start();
+      const controller = new AbortController();
+      const engine = new ComprehensionEngine({
+        provider: createOpenAITranslationProvider({
+          apiKey: "stub",
+          testEndpoint: stub.url,
+          modelId: "gpt-6.1-terra",
+        }),
+        languages: { sourceLanguage: "en", targetLanguage: "id" },
+        signal: controller.signal,
+        domain: feed.domain,
+      });
+      holder.engine = engine;
+      const accept = async (event: TranscriptEvent): Promise<void> => {
+        engine.ingest(event);
+        feed.ingestCanonicalEvent(event, 0);
+        await feed.idle();
+      };
+      await accept(finalEvent("epoch-0-turn-1", 1, "Before the gap the replica lagged."));
+      await accept(finalEvent("epoch-0-turn-2", 1, "The replica caught up after the gap."));
+      engine.ingest({
+        type: "discontinuity",
+        reason: "capture-gap",
+        detail: "audio gap",
+      });
+      await accept(finalEvent("epoch-0-turn-3", 1, "After the gap the replica caught up."));
+      await engine.finish();
+      expect(contexts.length).toBeGreaterThanOrEqual(3);
+      expect(contexts[1]?.length).toBeGreaterThan(0);
+      expect(contexts[contexts.length - 1]).toEqual([]);
+    } finally {
+      await stub.close();
+    }
+  });
+});
+
+describe("qualification configuration gates", () => {
+  test("malformed or over-limit numeric limits are rejected", () => {
+    expect(parseBoundedInteger("NaN", 16, 16, "max-requests").accepted).toBe(false);
+    expect(parseBoundedInteger("1.5", 16, 16, "max-requests").accepted).toBe(false);
+    expect(parseBoundedInteger("-1", 16, 16, "max-requests").accepted).toBe(false);
+    expect(parseBoundedInteger("Infinity", 16, 16, "max-requests").accepted).toBe(false);
+    expect(parseBoundedInteger("17", 16, 16, "max-requests").accepted).toBe(false);
+    expect(parseBoundedInteger("16", 16, 16, "max-requests").accepted).toBe(true);
+    expect(parseBoundedInteger(undefined, 16, 16, "max-requests").accepted).toBe(true);
+  });
+
+  test("an unstated or wrong trace checksum is rejected", () => {
+    expect(traceChecksumMatches(undefined, "abc").accepted).toBe(false);
+    expect(traceChecksumMatches("other", "abc").accepted).toBe(false);
+    expect(traceChecksumMatches("abc", "abc").accepted).toBe(true);
   });
 });

@@ -644,9 +644,9 @@ const transcription = await runTranscription({
     if (event.type === "discontinuity") {
       emit("reducer-accepted-discontinuity", event.detail, { reason: event.reason });
     }
+    comprehension?.ingest(event);
     feed.ingestCanonicalEvent(event, elapsed);
     await feed.idle();
-    comprehension?.ingest(event);
     const decision = decideRender(
       event.type === "partial" ? "partial" : event.type === "final" ? "final" : "discontinuity",
       0,

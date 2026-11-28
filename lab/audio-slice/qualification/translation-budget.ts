@@ -79,6 +79,49 @@ export function createBudgetedProvider(
   };
 }
 
+export interface LimitCheck {
+  readonly accepted: boolean;
+  readonly detail: string;
+}
+
+export function parseBoundedInteger(
+  raw: string | undefined,
+  fallback: number,
+  ceiling: number,
+  name: string,
+): LimitCheck {
+  if (raw === undefined) {
+    return { accepted: true, detail: `${name} defaults to ${fallback}` };
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return {
+      accepted: false,
+      detail: `${name} must be a positive integer, received "${raw}"`,
+    };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > ceiling) {
+    return {
+      accepted: false,
+      detail: `${name} must be an integer between 1 and ${ceiling}, received "${raw}"`,
+    };
+  }
+  return { accepted: true, detail: `${name} is ${parsed}` };
+}
+
+export function traceChecksumMatches(expected: string | undefined, actual: string): LimitCheck {
+  if (expected === undefined) {
+    return { accepted: false, detail: "the trace checksum must be stated explicitly" };
+  }
+  return expected === actual
+    ? { accepted: true, detail: `trace checksum ${actual} matches` }
+    : {
+        accepted: false,
+        detail: `trace checksum mismatch, expected ${actual}, received ${expected}`,
+      };
+}
+
 export function budgetRefusalResult(refusals: readonly BudgetRefusal[]): {
   readonly refused: boolean;
   readonly detail: string;

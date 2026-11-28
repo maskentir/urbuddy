@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,8 @@ import { RuntimeFeed } from "../feed.js";
 import {
   createBudgetedProvider,
   estimateCostUsd,
+  parseBoundedInteger,
+  traceChecksumMatches,
   TRANSLATION_RATES_PER_MILLION_TOKENS,
   type BudgetRefusal,
 } from "./translation-budget.js";
@@ -31,21 +34,25 @@ and never transmits audio.`;
 const here = fileURLToPath(new URL(".", import.meta.url));
 const EVALUATION_DIR = join(here, "..", "..", "..", "evaluation", "language", "comprehension-v1");
 
+const MAX_REQUESTS_CEILING = 16;
+const MAX_INPUT_BYTES_CEILING = 16_000;
+const MAX_OUTPUT_TOKENS = 1_024;
+const FRAMING_ALLOWANCE_TOKENS = 256;
+const TOKEN_BUDGET_RATIO = 4;
+
 interface CapturedEvent {
   readonly utteranceId: string;
   readonly revision: number;
   readonly text: string;
+  readonly kind: "partial" | "final" | "discontinuity";
+  readonly reason?: string;
+  readonly detail?: string;
 }
 
 interface EvaluationCase {
   readonly id: string;
-  readonly sourceLanguage: string;
-  readonly targetLanguage: string;
   readonly source: string;
-  readonly context: readonly string[];
   readonly reference: string;
-  readonly intendedMeaning: string;
-  readonly incorrectInterpretation: string;
 }
 
 const { values } = parseArgs({
@@ -58,7 +65,8 @@ const { values } = parseArgs({
     "max-input-bytes": { type: "string" },
     "owner-authorized": { type: "boolean" },
     authorization: { type: "string" },
-    output: { type: "string" },
+    "trace-sha256": { type: "string" },
+    "authorization-scope": { type: "string" },
   },
 });
 
@@ -67,68 +75,134 @@ if (values.help === true) {
   process.exit(0);
 }
 
-const environment = loadOperationEnvironment(process.env, values["env-file"]);
-if (environment.isErr()) {
-  throw new Error(`environment could not be loaded: ${environment.error.message}`);
-}
-const env = environment.value;
-const model = values.model ?? DEFAULT_TRANSLATION_MODEL;
-const maxRequests = values["max-requests"] === undefined ? 16 : Number(values["max-requests"]);
-const maxInputBytes =
-  values["max-input-bytes"] === undefined ? 16_000 : Number(values["max-input-bytes"]);
-
-const development = JSON.parse(readFileSync(join(EVALUATION_DIR, "development.json"), "utf8")) as {
-  cases: EvaluationCase[];
-};
-const heldout = JSON.parse(readFileSync(join(EVALUATION_DIR, "heldout.json"), "utf8")) as {
-  cases: EvaluationCase[];
-};
-const cases = [...development.cases, ...heldout.cases];
-
-const tracePath = values.trace;
-if (tracePath === undefined) {
-  throw new Error("a captured canonical transcript trace is required");
-}
-const captured = readFileSync(tracePath, "utf8")
-  .split("\n")
-  .filter((line) => line.trim().length > 0)
-  .map((line) => JSON.parse(line) as { kind: string; data?: Record<string, unknown> })
-  .filter((row) => row.kind === "final-committed")
-  .map((row) => ({
-    utteranceId: String(row.data?.["utteranceId"] ?? ""),
-    revision: Number(row.data?.["revision"] ?? 0),
-    text: String(row.data?.["text"] ?? ""),
-  })) as CapturedEvent[];
-
-if (captured.length === 0) {
-  throw new Error("the captured trace carries no canonical final transcript events");
-}
-
-if (values["owner-authorized"] !== true || values.authorization === undefined) {
-  process.stdout.write(
-    "translation execution is not authorized. A translation specific owner authorization and an\n" +
-      "authorization reference are required, and the Muse authorization is not reused.\n" +
-      "No provider request was issued.\n",
-  );
+function fail(message: string): never {
+  process.stdout.write(`${message}\nNo provider request was issued.\n`);
   process.exit(2);
 }
 
-const translationConfig = loadTranslationConfig(true, {}, env);
-if (translationConfig.isErr()) {
-  throw new Error(`translation configuration failed: ${translationConfig.error.message}`);
+const requestsLimit = parseBoundedInteger(
+  values["max-requests"],
+  MAX_REQUESTS_CEILING,
+  MAX_REQUESTS_CEILING,
+  "max-requests",
+);
+if (!requestsLimit.accepted) fail(requestsLimit.detail);
+const maxRequests = Number(values["max-requests"] ?? MAX_REQUESTS_CEILING);
+const bytesLimit = parseBoundedInteger(
+  values["max-input-bytes"],
+  MAX_INPUT_BYTES_CEILING,
+  MAX_INPUT_BYTES_CEILING,
+  "max-input-bytes",
+);
+if (!bytesLimit.accepted) fail(bytesLimit.detail);
+const maxInputBytes = Number(values["max-input-bytes"] ?? MAX_INPUT_BYTES_CEILING);
+const model = values.model ?? DEFAULT_TRANSLATION_MODEL;
+const tracePath = values.trace;
+if (tracePath === undefined) {
+  fail("a captured canonical transcript trace is required.");
 }
-if (!translationConfig.value.enabled) {
-  throw new Error("translation configuration is not enabled");
+
+const traceBytes = readFileSync(tracePath);
+const traceSha256 = createHash("sha256").update(traceBytes).digest("hex");
+const checksum = traceChecksumMatches(values["trace-sha256"], traceSha256);
+if (!checksum.accepted) fail(checksum.detail);
+
+const captured = traceBytes
+  .toString("utf8")
+  .split("\n")
+  .filter((line) => line.trim().length > 0)
+  .map((line) => JSON.parse(line) as { kind: string; data?: Record<string, unknown> })
+  .filter((row) => row.kind === "final-committed" || row.kind === "canonical-discontinuity")
+  .map((row): CapturedEvent => {
+    if (row.kind === "canonical-discontinuity") {
+      return {
+        utteranceId: String(row.data?.["utteranceId"] ?? ""),
+        revision: Number(row.data?.["revision"] ?? 0),
+        text: "",
+        kind: "discontinuity",
+        reason: String(row.data?.["reason"] ?? "capture-gap"),
+        detail: String(row.data?.["detail"] ?? ""),
+      };
+    }
+    return {
+      utteranceId: String(row.data?.["utteranceId"] ?? ""),
+      revision: Number(row.data?.["revision"] ?? 0),
+      text: String(row.data?.["text"] ?? ""),
+      kind: "final",
+    };
+  }) as CapturedEvent[];
+
+if (captured.length === 0) {
+  fail("the captured trace carries no canonical transcript events.");
+}
+
+const worstCaseInputTokens =
+  maxRequests * Math.ceil(maxInputBytes / TOKEN_BUDGET_RATIO + FRAMING_ALLOWANCE_TOKENS);
+const worstCaseOutputTokens = maxRequests * MAX_OUTPUT_TOKENS;
+const worstCaseCostUsd = estimateCostUsd(model, worstCaseInputTokens, worstCaseOutputTokens) ?? 0;
+const rate = TRANSLATION_RATES_PER_MILLION_TOKENS[model];
+if (rate === undefined) {
+  fail(`no published rate is known for model ${model}.`);
+}
+
+const requiredScope = [
+  `model=${model}`,
+  `trace=${traceSha256}`,
+  `maxRequests=${maxRequests}`,
+  `maxInputBytes=${maxInputBytes}`,
+  `maxOutputTokens=${MAX_OUTPUT_TOKENS}`,
+  `maxCostUsd=${worstCaseCostUsd.toFixed(6)}`,
+].join(";");
+
+process.stdout.write(
+  `translation qualification preflight\n` +
+    `  model=${model} provider=openai endpoint=from environment\n` +
+    `  trace=${tracePath}\n` +
+    `  trace sha256=${traceSha256}\n` +
+    `  captured canonical events=${captured.length}\n` +
+    `  limits: ${maxRequests} requests, ${maxInputBytes} serialized input bytes per request, ` +
+    `${MAX_OUTPUT_TOKENS} output tokens per request\n` +
+    `  conservative cost ceiling: ${worstCaseInputTokens} input and ${worstCaseOutputTokens} output ` +
+    `tokens = USD ${worstCaseCostUsd.toFixed(6)} at USD ${rate.input}/${rate.output} per million\n` +
+    `  required authorization scope: ${requiredScope}\n`,
+);
+
+if (values["owner-authorized"] !== true || values.authorization === undefined) {
+  fail(
+    "a translation specific owner authorization, an authorization reference, and the exact " +
+      "authorization scope are required. The Muse authorization is not reused.",
+  );
+}
+if (values["authorization-scope"] !== requiredScope) {
+  fail(
+    `the authorization scope does not match the computed scope.\n  expected: ${requiredScope}\n` +
+      `  received: ${values["authorization-scope"] ?? "none"}`,
+  );
+}
+
+const environment = loadOperationEnvironment(process.env, values["env-file"]);
+if (environment.isErr()) {
+  fail(`the environment could not be loaded: ${environment.error.message}`);
+}
+const env = environment.value;
+const translationConfig = loadTranslationConfig(true, {}, env);
+if (translationConfig.isErr() || !translationConfig.value.enabled) {
+  fail("the translation configuration is not valid.");
 }
 const provider = createTranslationProviderFromEnv(env, model);
 if (provider.isErr()) {
-  throw new Error(`translation provider failed: ${provider.error.message}`);
+  fail(`the translation provider is not configured: ${provider.error.message}`);
 }
 
 const refusals: BudgetRefusal[] = [];
 const budgeted = createBudgetedProvider(
   provider.value,
-  { maxRequests, maxInputBytesPerRequest: maxInputBytes, maxOutputTokens: 1_024, modelId: model },
+  {
+    maxRequests,
+    maxInputBytesPerRequest: maxInputBytes,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    modelId: model,
+  },
   (refusal) => refusals.push(refusal),
 );
 
@@ -159,66 +233,57 @@ const engine = new ComprehensionEngine({
 });
 holder.engine = engine;
 
-const results: { id: string; source: string; translation: string | undefined }[] = [];
-for (const [index, event] of captured.entries()) {
-  const canonical: TranscriptEvent = {
-    type: "final",
-    utteranceId: event.utteranceId,
-    revision: event.revision,
-    text: event.text,
-  };
-  feed.ingestCanonicalEvent(canonical, index);
+for (const event of captured) {
+  const canonical: TranscriptEvent =
+    event.kind === "discontinuity"
+      ? {
+          type: "discontinuity",
+          reason: event.reason === "reconnect" ? "reconnect" : "capture-gap",
+          detail: event.detail ?? "",
+        }
+      : {
+          type: "final",
+          utteranceId: event.utteranceId,
+          revision: event.revision,
+          text: event.text,
+        };
   engine.ingest(canonical);
-  await feed.idle();
+  if (event.kind !== "discontinuity") {
+    feed.ingestCanonicalEvent(canonical, 0);
+    await feed.idle();
+  }
 }
 
 const summary = await engine.finish();
 
-const byText = new Map<string, string | undefined>();
-for (const row of feed.domain.utterances) {
-  byText.set(row.text, row.translation?.text);
-}
-for (const [index, event] of captured.entries()) {
-  const evaluationCase = cases.find((entry) => entry.source === event.text);
-  results.push({
-    id: evaluationCase?.id ?? `captured-${index + 1}`,
-    source: event.text,
-    translation: byText.get(event.text),
-  });
-}
+const cases = (
+  JSON.parse(readFileSync(join(EVALUATION_DIR, "development.json"), "utf8")) as {
+    cases: EvaluationCase[];
+  }
+).cases;
 
-const inputTokens = summary.inputTokens ?? 0;
-const outputTokens = summary.outputTokens ?? 0;
-const rate = TRANSLATION_RATES_PER_MILLION_TOKENS[model];
 const lines: string[] = [];
 lines.push("translation-only qualification");
-lines.push(`model=${model} provider=${provider.value.providerId} endpoint=from environment`);
 lines.push(`authorization: ${values.authorization}`);
-lines.push(
-  `captured canonical final events=${captured.length} evaluation cases=${cases.length} ` +
-    `development=${development.cases.length} heldout=${heldout.cases.length}`,
-);
+lines.push(`scope: ${requiredScope}`);
 lines.push(
   `requests=${summary.requests} responses=${summary.responses} committed=${summary.committed} ` +
     `provisionals=${summary.provisionals} failed=${summary.failedInvocations} ` +
     `cancelled=${summary.cancelledInvocations} staleRejected=${summary.staleRejected} ` +
-    `degraded=${summary.degraded} uncovered=${summary.uncovered}`,
+    `degraded=${summary.degraded} uncovered=${summary.uncovered} ` +
+    `inputTokens=${summary.inputTokens ?? "unknown"} outputTokens=${summary.outputTokens ?? "unknown"} ` +
+    `estimatedCostUsd=${(estimateCostUsd(model, summary.inputTokens ?? 0, summary.outputTokens ?? 0) ?? 0).toFixed(6)}`,
 );
-lines.push(
-  `budget: max requests ${maxRequests}, max serialized input ${maxInputBytes} bytes, ` +
-    `max output tokens 1024, refusals ${refusals.length}` +
-    (refusals.length === 0 ? "" : ` (${refusals.map((refusal) => refusal.reason).join("; ")})`),
-);
-lines.push(
-  `usage: ${inputTokens} input tokens, ${outputTokens} output tokens, estimated cost ` +
-    `USD ${(estimateCostUsd(model, inputTokens, outputTokens) ?? 0).toFixed(6)} ` +
-    `(rate ${rate?.input ?? "unknown"}/${rate?.output ?? "unknown"} per million)`,
-);
+if (refusals.length > 0) {
+  lines.push(`budget refusals: ${refusals.map((refusal) => refusal.reason).join("; ")}`);
+}
 lines.push("");
-lines.push("translations:");
-for (const result of results) {
-  lines.push(`  ${result.id}`);
-  lines.push(`    source: ${result.source}`);
-  lines.push(`    output: ${result.translation ?? "no translation"}`);
+lines.push("committed translations:");
+for (const row of feed.domain.utterances) {
+  const evaluationCase = cases.find((entry) => entry.source === row.text);
+  lines.push(`  ${evaluationCase?.id ?? row.key}`);
+  lines.push(`    source: ${row.text}`);
+  lines.push(`    translation: ${row.translation?.text ?? "none"}`);
+  lines.push(`    state: ${row.translation?.state ?? "none"}`);
 }
 process.stdout.write(`${lines.join("\n")}\n`);
