@@ -675,6 +675,20 @@ if (transcription.isErr()) {
   );
   if (comprehension !== undefined) {
     const summary = await comprehension.finish();
+    for (const observation of comprehension.observations) {
+      emit(
+        `translation-${observation.type}`,
+        `${observation.utteranceId} r${observation.revision}`,
+        {
+          utteranceId: observation.utteranceId,
+          revision: observation.revision,
+          sourceArrivedMs: observation.sourceArrivedMs,
+          queueMs: observation.queueMs,
+          responseMs: observation.responseMs,
+          publicationMs: observation.publicationMs,
+        },
+      );
+    }
     emit(
       "translation-summary",
       `committed=${summary.committed} provisionals=${summary.provisionals} requests=${summary.requests} ` +
