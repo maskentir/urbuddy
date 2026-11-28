@@ -52,7 +52,13 @@ function Caption({
       {item.translation === undefined && !item.expectsTranslation ? (
         <Box flexDirection="column">
           <Text>{item.text}</Text>
-          {item.finalized ? <Text color="gray">Belum ada terjemahan.</Text> : null}
+          {item.finalized ? (
+            <Text color="gray">
+              {state.assistanceEnabled === false
+                ? "Terjemahan tidak diaktifkan."
+                : "Belum ada terjemahan."}
+            </Text>
+          ) : null}
         </Box>
       ) : null}
       {item.translation !== undefined && showOriginal ? (

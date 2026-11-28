@@ -25,6 +25,7 @@ export interface Session {
   readonly user: UserState;
   readonly atMs: number;
   readonly running: boolean;
+  readonly assistanceEnabled?: boolean;
 }
 
 export function initialSession(domain: DomainState): Session {

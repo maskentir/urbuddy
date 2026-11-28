@@ -1,0 +1,45 @@
+{
+  "fixtureId": "muse-qualification-01",
+  "language": "en-US",
+  "sampleRate": 16000,
+  "channels": 1,
+  "maxAudioSeconds": 30,
+  "silenceBetweenTurnsMs": 350,
+  "technicalTerms": [
+    "replication lag",
+    "connection pool",
+    "vacuum",
+    "reindex",
+    "write ahead log",
+    "compaction lease",
+    "tombstone sweep",
+    "p99 latency"
+  ],
+  "turns": [
+    {
+      "id": "t1",
+      "text": "The export finished, but replication lag is still above two minutes."
+    },
+    {
+      "id": "t2",
+      "text": "Can we bump the connection pool limit before the next batch?"
+    },
+    {
+      "id": "t3",
+      "text": "Sure, but the pool saturates when the vacuum and the reindex overlap."
+    },
+    {
+      "id": "t4",
+      "text": "Actually, correction. Saturation starts earlier; the write ahead log backs up first."
+    },
+    {
+      "id": "t5",
+      "text": "Then the compaction lease is held by the stale replica, so the tombstone sweep waits."
+    },
+    {
+      "id": "t6",
+      "text": "Understood. I will cap the vacuum window and watch p99 latency."
+    }
+  ],
+  "referenceTranscript": "The nightly export finished, but replication lag is still above two minutes. Can we bump the connection pool limit before the next batch? Sure, but the pool saturates when the vacuum and the reindex overlap. Actually, correction. Saturation starts earlier; the write ahead log backs up first. Then the compaction lease is held by the stale replica, so the tombstone sweep waits. Understood. I will cap the vacuum window and watch p99 latency."
+}

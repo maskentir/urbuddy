@@ -63,6 +63,46 @@ Regenerate audio only if `audio/meeting.wav` is missing:
 node lab/audio-slice/tools/generate-audio.mjs
 ```
 
+## Muse STT qualification
+
+The same runtime path can be driven by the real production Muse adapter
+instead of the replay adapter:
+
+```text
+WAV source -> Muse WebSocket provider -> canonical provider events
+  -> TranscriptReducer -> SessionRuntime -> session projection
+    -> Adaptive Single Flow renderer
+```
+
+The qualification lives in `lab/audio-slice/qualification/`:
+
+| File                       | Responsibility                                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `reference.json`           | Exact reference transcript and technical-term list. Read by the evaluation harness only.                                               |
+| `generate-audio.mjs`       | Generates the local fixture audio and its manifest. The audio is ignored by Git.                                                       |
+| `preflight.ts`             | Credential, provider, model, endpoint, format, limits, budget, and owner-authorization checks.                                         |
+| `instrumented-provider.ts` | Production provider decorator that timestamps provider events and audio frames and enforces the audio and budget limits.               |
+| `run-muse.tsx`             | The live qualification runner and trace writer.                                                                                        |
+| `evaluate.ts`              | Word error rate, technical-term accuracy, omissions, insertions, and latency report.                                                   |
+| `live-path.test.ts`        | The whole live path against a local loopback server, including failure, cancellation, budget, and duplicate handling. No paid request. |
+
+```sh
+# Generate the local fixture audio (ignored by Git)
+pnpm lab:muse-qualification:fixture
+
+# Preflight and, only with explicit owner authorization, the paid run
+pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <reference>
+
+# Evaluate a recorded run
+pnpm lab:muse-qualification:evaluate -- <trace.jsonl>
+```
+
+The run transmits at most 30 s of synthetic audio per attempt, allows at
+most three attempts, and estimates the charge from the audio it actually
+sends. It issues no request unless the preflight passes, including the
+explicit owner authorization. Translation and intelligence assistance are
+disabled for a qualification run and the surface says so.
+
 ## Evidence
 
 - `frames/*.ansi` are the canonical frame artifacts. They are rendered

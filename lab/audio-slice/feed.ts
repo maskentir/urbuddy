@@ -381,6 +381,24 @@ export class RuntimeFeed {
     this.queue.push(event);
   }
 
+  ingestCanonicalEvent(event: TranscriptEvent, atMs: number): void {
+    if (event.type === "discontinuity") {
+      applyTranscriptDetail(this.domain, event);
+      return;
+    }
+    if (event.type === "progress") return;
+    if (!this.domain.byKey.has(event.utteranceId)) {
+      registerUtterance(
+        this.domain,
+        event.utteranceId,
+        event.utteranceId,
+        event.speaker ?? "",
+        atMs,
+      );
+    }
+    this.pushStreamEvent(event);
+  }
+
   private acceptTranscript(
     event: TranscriptEvent,
     source: SpeechProviderEvent,
@@ -397,6 +415,11 @@ export class RuntimeFeed {
         row.speakerKey = event.speaker;
       }
     }
+    this.pushStreamEvent(event);
+  }
+
+  private pushStreamEvent(event: TranscriptEvent): void {
+    if (event.type !== "partial" && event.type !== "final") return;
     const stream: StreamEvent = {
       sessionId: this.options.sessionId,
       streamId: this.options.streamId,

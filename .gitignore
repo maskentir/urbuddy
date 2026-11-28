@@ -11,3 +11,5 @@ evaluation/language/results/
 !.env.example
 lab/audio-slice/audio/*.wav
 lab/audio-slice/qualification/audio/*.wav
+lab/audio-slice/qualification/audio/
+lab/audio-slice/qualification/trace/

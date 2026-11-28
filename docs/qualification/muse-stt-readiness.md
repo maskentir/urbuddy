@@ -1,12 +1,40 @@
 # Real-provider qualification readiness (Muse STT)
 
-Date: 2026-11-28. Status: readiness prepared. No paid request has been
-issued. Execution requires explicit owner authorization.
+Date: 2026-11-28. Status: readiness prepared and executable. No paid
+request has been issued. Execution requires explicit owner authorization.
 
 This checklist defines one controlled provider-backed test with
 non-private synthetic audio. It does not authorize the test, does not
 capture real meetings, and does not expand into memory, learning
 personalization, or agent orchestration.
+
+## Implementation
+
+| Piece                            | Location                                                 |
+| -------------------------------- | -------------------------------------------------------- |
+| Qualification runner             | `lab/audio-slice/qualification/run-muse.tsx`             |
+| Preflight                        | `lab/audio-slice/qualification/preflight.ts`             |
+| Provider telemetry and limits    | `lab/audio-slice/qualification/instrumented-provider.ts` |
+| Fixture and reference transcript | `lab/audio-slice/qualification/reference.json`           |
+| Local fixture generator          | `lab/audio-slice/qualification/generate-audio.mjs`       |
+| Evaluation harness               | `lab/audio-slice/qualification/evaluate.ts`              |
+| Loopback proof of the live path  | `lab/audio-slice/qualification/live-path.test.ts`        |
+
+## Launch command
+
+```sh
+# 1. generate the local fixture audio (ignored by Git)
+pnpm lab:muse-qualification:fixture
+
+# 2. preflight only, no request issued
+pnpm lab:muse-qualification -- --env-file .env
+
+# 3. authorized run, at most 30 s of audio per attempt
+pnpm lab:muse-qualification -- --env-file .env --owner-authorized --authorization <owner-reference>
+
+# 4. evaluate the recorded run
+pnpm lab:muse-qualification:evaluate -- <trace.jsonl>
+```
 
 ## What exists today
 
