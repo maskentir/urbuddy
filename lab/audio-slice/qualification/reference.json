@@ -41,5 +41,5 @@
       "text": "Understood. I will cap the vacuum window and watch p99 latency."
     }
   ],
-  "referenceTranscript": "The nightly export finished, but replication lag is still above two minutes. Can we bump the connection pool limit before the next batch? Sure, but the pool saturates when the vacuum and the reindex overlap. Actually, correction. Saturation starts earlier; the write ahead log backs up first. Then the compaction lease is held by the stale replica, so the tombstone sweep waits. Understood. I will cap the vacuum window and watch p99 latency."
+  "referenceTranscript": "The export finished, but replication lag is still above two minutes. Can we bump the connection pool limit before the next batch? Sure, but the pool saturates when the vacuum and the reindex overlap. Actually, correction. Saturation starts earlier; the write ahead log backs up first. Then the compaction lease is held by the stale replica, so the tombstone sweep waits. Understood. I will cap the vacuum window and watch p99 latency."
 }

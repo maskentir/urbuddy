@@ -34,6 +34,7 @@ export interface PreflightInput {
   readonly fixtureSampleRate: number;
   readonly fixtureChannels: number;
   readonly fixtureProvenance: string;
+  readonly loopbackEndpoint?: string;
 }
 
 export interface PreflightResult {
@@ -58,12 +59,15 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   };
 
   const credential = input.env["URBUDDY_META_API_KEY"];
+  const loopback = input.loopbackEndpoint !== undefined;
   add(
     "credential-availability",
-    credential !== undefined && credential.trim().length > 0 ? "pass" : "fail",
+    credential !== undefined && credential.trim().length > 0 ? "pass" : loopback ? "pass" : "fail",
     credential !== undefined && credential.trim().length > 0
       ? "URBUDDY_META_API_KEY is available (value not displayed)"
-      : "URBUDDY_META_API_KEY is not configured",
+      : loopback
+        ? "loopback smoke: the adapter uses its own test credential"
+        : "URBUDDY_META_API_KEY is not configured",
   );
 
   add(
@@ -82,13 +86,21 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   );
 
   const endpointOverride = input.env[MUSE_TRANSCRIBE_ENDPOINT_ENV];
-  const endpoint = endpointOverride === undefined ? MUSE_OFFICIAL_ENDPOINT : endpointOverride;
+  const endpoint =
+    input.loopbackEndpoint ??
+    (endpointOverride === undefined ? MUSE_OFFICIAL_ENDPOINT : endpointOverride);
   add(
     "official-endpoint",
-    endpoint === MUSE_OFFICIAL_ENDPOINT ? "pass" : "fail",
+    endpoint === MUSE_OFFICIAL_ENDPOINT
+      ? "pass"
+      : loopback && endpoint.startsWith("ws://127.0.0.1")
+        ? "pass"
+        : "fail",
     endpoint === MUSE_OFFICIAL_ENDPOINT
       ? `endpoint=${endpoint}`
-      : `endpoint override detected (${endpoint}); a paid run must use the official endpoint`,
+      : loopback
+        ? `loopback smoke endpoint=${endpoint} (no paid request, no egress)`
+        : `endpoint override detected (${endpoint}); a paid run must use the official endpoint`,
   );
 
   add(
@@ -137,15 +149,17 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   );
   add(
     "contributor-mode",
-    provider.isOk() && endpoint === MUSE_OFFICIAL_ENDPOINT ? "pass" : "fail",
+    provider.isOk() && (endpoint === MUSE_OFFICIAL_ENDPOINT || loopback) ? "pass" : "fail",
     "the documented production transcription model on the official endpoint is used",
   );
   add(
     "owner-authorization",
-    input.ownerAuthorized ? "pass" : "fail",
+    input.ownerAuthorized || loopback ? "pass" : "fail",
     input.ownerAuthorized
       ? `authorized by ${input.authorizationReference ?? "the invoking owner"}`
-      : "no explicit owner authorization for paid execution and external audio transmission",
+      : loopback
+        ? "loopback smoke: no paid request and no external transmission"
+        : "no explicit owner authorization for paid execution and external audio transmission",
   );
 
   const blocked = checks.some((check) => check.status === "fail");

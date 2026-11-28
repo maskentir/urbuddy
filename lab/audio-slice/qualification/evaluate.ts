@@ -198,15 +198,19 @@ export function evaluate(
   const providerEvents = trace.filter((row) => row.kind === "provider-event");
   const partialsByTurn = new Map<string, TraceRow[]>();
   const completedByTurn = new Map<string, TraceRow>();
+  let currentTurn: string | undefined;
   for (const row of providerEvents) {
     const turn = turnIdOf(row.detail);
-    if (turn === undefined) continue;
-    if (row.detail.startsWith("partial")) {
-      const bucket = partialsByTurn.get(turn) ?? [];
-      bucket.push(row);
-      partialsByTurn.set(turn, bucket);
+    if (row.detail.startsWith("turnStarted") && turn !== undefined) {
+      currentTurn = turn;
+      if (!partialsByTurn.has(turn)) partialsByTurn.set(turn, []);
     }
-    if (row.detail.startsWith("completed")) {
+    if (row.detail.startsWith("partial")) {
+      const bucket = partialsByTurn.get(currentTurn ?? "none") ?? [];
+      bucket.push(row);
+      partialsByTurn.set(currentTurn ?? "none", bucket);
+    }
+    if (row.detail.startsWith("completed") && turn !== undefined) {
       completedByTurn.set(turn, row);
     }
   }
@@ -229,7 +233,10 @@ export function evaluate(
         : (partialsByTurn.get(turnIdOf(providerTurn.detail) ?? "") ?? []);
     const firstPartial = partials[0];
     const canonical = canonicalFinals[index];
-    const render = renders[index];
+    const render =
+      canonical === undefined
+        ? undefined
+        : renders.find((row) => row.elapsedMs >= canonical.elapsedMs);
     const finalText = canonical?.detail.split(": ").slice(1).join(": ") ?? "";
     if (finalText.length > 0) actualParts.push(finalText);
     turns.push({

@@ -53,6 +53,7 @@ const { values } = parseArgs({
     "max-seconds": { type: "string" },
     "max-attempts": { type: "string" },
     headless: { type: "boolean" },
+    loopback: { type: "string" },
     output: { type: "string" },
   },
 });
@@ -68,6 +69,7 @@ const model = values.model ?? "muse-voice-transcribe-1.0";
 const mode = values.mode ?? "endpointing";
 const fixturePath = values.fixture ?? DEFAULT_FIXTURE;
 const ownerAuthorized = values["owner-authorized"] === true;
+const loopbackEndpoint = values.loopback;
 
 const environment = loadOperationEnvironment(process.env, values["env-file"]);
 if (environment.isErr()) {
@@ -95,6 +97,7 @@ const preflight = runPreflight({
   fixtureSampleRate: manifest.sampleRate,
   fixtureChannels: 1,
   fixtureProvenance: FIXTURE_PROVENANCE,
+  ...(loopbackEndpoint === undefined ? {} : { loopbackEndpoint }),
 });
 process.stdout.write(`${formatPreflight(preflight)}\n`);
 if (preflight.blocked) {
@@ -114,7 +117,9 @@ if (opened.isErr()) {
 }
 const source = opened.value;
 
-const provider = createMuseProviderFromEnv(env, model);
+const providerEnv: Readonly<Record<string, string | undefined>> =
+  loopbackEndpoint === undefined ? env : { ...env, URBUDDY_TRANSCRIBE_ENDPOINT: loopbackEndpoint };
+const provider = createMuseProviderFromEnv(providerEnv, model);
 if (provider.isErr()) {
   throw new Error(`provider configuration failed: ${provider.error.message}`);
 }
