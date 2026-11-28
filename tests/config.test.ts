@@ -69,6 +69,7 @@ describe("explicit operation environment", () => {
       const translation = loadTranslationConfig(true, { targetLanguage: "zh-Hant" }, loaded.value);
       expect(translation.isOk() && translation.value).toEqual({
         enabled: true,
+        modelConfigVersion: "translation-model-v1",
         provider: "openai",
         model: "gpt-6.1-terra",
         sourceLanguage: "ja",
