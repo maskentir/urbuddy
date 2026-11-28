@@ -154,3 +154,41 @@ render.
 
 The provider event to confirmed render latency could not be established.
 Everything else in the mandatory evidence list was measured.
+
+## Arithmetic correction, 2026-11-28
+
+The measurements above are preserved. Two summary values were wrong and are
+corrected here:
+
+| Value                                     | Reported | Corrected     |
+| ----------------------------------------- | -------- | ------------- |
+| Median streaming first partial            | 914.0 ms | **972.5 ms**  |
+| First partial within 1 s                  | 3 of 4   | **2 of 4**    |
+| Median end of transmitted speech to final | 382.7 ms | **382.75 ms** |
+
+The individual observations are unchanged: 789.7, 914.0, 1031.0, and
+1531.6 ms. The median of those four is the mean of the two middle
+values, 914.0 and 1031.0, which is 972.5 ms. Two of the four observations
+are within one second, 789.7 ms and 914.0 ms.
+
+## Accepted limitations
+
+These limitations are accepted with the Muse qualification and are carried
+forward. The Muse qualification cycle is closed and is not reopened.
+
+1. The actual confirmed-render latency is unavailable. The confirmation
+   mechanism was corrected after the run and is covered by a test, but the
+   number must come from a later authorized run.
+2. The provider merges turns. Two of the four final turns each covered two
+   reference segments.
+3. Technical-token recognition errors persist. `p99` was rendered as `page
+99` in both attempts.
+4. Diarization and addressee recognition are unqualified. The endpointing
+   mode was used.
+5. Endurance and session rotation are unqualified. The longest run was
+   thirty seconds.
+6. Retention and confirmed billing are unresolved. Zero data retention is
+   documented at price parity but not contractually verified, and the
+   provider issued no invoice in either run.
+7. A transient repository gate failure is unresolved. It was not reproduced
+   in isolation and no test was weakened to hide it.
