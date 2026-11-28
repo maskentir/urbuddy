@@ -19,12 +19,14 @@ export type TranslationConfig =
       readonly enabled: true;
       readonly provider: "openai";
       readonly model: string;
+      readonly modelConfigVersion: string;
     });
 
 export const DEFAULT_TRANSLATION_LANGUAGES: TranslationLanguages = Object.freeze({
   sourceLanguage: "auto",
   targetLanguage: "id",
 });
+const TRANSLATION_MODEL_CONFIG_VERSION = "translation-model-v1";
 export const DEFAULT_TRANSLATION_MODEL = "gpt-6.1-terra";
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language", fallback: "none" });
@@ -87,5 +89,14 @@ export function loadTranslationConfig(
   if (!/^[a-z\d][a-z\d.-]{0,79}$/.test(model)) {
     return err(appError("CONFIG_INVALID", "invalid translation model identifier"));
   }
-  return ok(Object.freeze({ enabled: true, sourceLanguage, targetLanguage, provider, model }));
+  return ok(
+    Object.freeze({
+      enabled: true,
+      sourceLanguage,
+      targetLanguage,
+      provider,
+      model,
+      modelConfigVersion: TRANSLATION_MODEL_CONFIG_VERSION,
+    }),
+  );
 }

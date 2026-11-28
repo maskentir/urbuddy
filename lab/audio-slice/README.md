@@ -57,10 +57,11 @@ pnpm lab:audio-slice:reference
 Space pauses and resumes audio and the replay clock together. `q` or
 Ctrl-C stops audio and writes a runtime trace under `trace/`.
 
-Regenerate audio only if `audio/meeting.wav` is missing:
+Prepare the lab test fixtures after a clean checkout on macOS:
 
 ```sh
 node lab/audio-slice/tools/generate-audio.mjs
+pnpm lab:muse-qualification:fixture
 ```
 
 ## Muse STT qualification

@@ -1,0 +1,66 @@
+{
+  "version": "comprehension-v1",
+  "split": "heldout",
+  "cases": [
+    {
+      "id": "holdout-commitment-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "I will send the design doc by noon.",
+      "context": [],
+      "reference": "Saya akan mengirimkan dokumen desain paling lambat tengah hari.",
+      "intendedMeaning": "A commitment by the speaker with an inclusive noon boundary.",
+      "incorrectInterpretation": "Saya akan mengirimkan dokumen desain sebelum tengah hari."
+    },
+    {
+      "id": "holdout-attribution-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "Rina said the vet may test API v2.4, but Omar must approve it.",
+      "context": [],
+      "reference": "Rina berkata bahwa dokter hewan mungkin akan menguji API v2.4, tetapi Omar harus menyetujuinya.",
+      "intendedMeaning": "The possibility belongs to the vet, the obligation belongs to Omar, and the version is exact.",
+      "incorrectInterpretation": "Rina said Omar must test API v2.4."
+    },
+    {
+      "id": "holdout-conditional-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "If Arif checks in by Friday, he can join the trial, including if he checks in on Friday.",
+      "context": [],
+      "reference": "Jika Arif melakukan check-in paling lambat hari Jumat, dia dapat mengikuti uji coba, termasuk jika dia melakukan check-in pada hari Jumat.",
+      "intendedMeaning": "The Friday boundary is inclusive and the eligibility follows from it.",
+      "incorrectInterpretation": "Jika Arif check-in pada hari Jumat, dia tidak dapat mengikuti uji coba."
+    },
+    {
+      "id": "holdout-units-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "Raise the p99 latency ceiling to two hundred fifty milliseconds, not two seconds.",
+      "context": [],
+      "reference": "Naikkan batas latensi p99 menjadi dua ratus lima puluh milidetik, bukan dua detik.",
+      "intendedMeaning": "The target is 250 ms and the rejected value is 2 seconds.",
+      "incorrectInterpretation": "Naikkan batas latensi p99 menjadi dua detik."
+    },
+    {
+      "id": "holdout-uncertainty-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "The delivery estimate is uncertain. The package may arrive before noon.",
+      "context": [],
+      "reference": "Perkiraan waktu pengiriman belum pasti. Paket mungkin tiba sebelum tengah hari.",
+      "intendedMeaning": "The uncertainty and the possibility are both preserved.",
+      "incorrectInterpretation": "The package will arrive before noon."
+    },
+    {
+      "id": "holdout-modality-001",
+      "sourceLanguage": "en",
+      "targetLanguage": "id",
+      "source": "We might consider Redis for the export cache.",
+      "context": [],
+      "reference": "Kita mungkin mempertimbangkan Redis untuk cache ekspor.",
+      "intendedMeaning": "Consideration stays tentative and the component is named.",
+      "incorrectInterpretation": "Kita akan mempertimbangkan Redis untuk cache ekspor."
+    }
+  ]
+}

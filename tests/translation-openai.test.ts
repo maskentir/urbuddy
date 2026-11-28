@@ -7,7 +7,6 @@ import {
   createOpenAITranslationProvider,
   createTranslationProviderFromEnv,
   isLoopbackTranslationEndpoint,
-  OPENAI_TRANSLATION_MODEL_ID,
   resolveTranslationEndpoint,
   TRANSLATE_API_KEY_ENV,
   TRANSLATE_ENDPOINT_ENV,
@@ -41,7 +40,7 @@ function readBody(request: IncomingMessage): Promise<Buffer> {
 
 function completionResponse(
   translation: string,
-  model: string = OPENAI_TRANSLATION_MODEL_ID,
+  model: string = DEFAULT_TRANSLATION_MODEL,
 ): string {
   return JSON.stringify({
     id: "chatcmpl-test",
@@ -263,6 +262,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const provider = createOpenAITranslationProvider({
       apiKey: "sentinel",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = await provider.translate(
       buildTranslationRequest(
@@ -283,10 +283,13 @@ describe("OpenAI translation adapter (local stub)", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(completionResponse("Baik."));
     });
-    const created = createTranslationProviderFromEnv({
-      [TRANSLATE_API_KEY_ENV]: "REAL-OPERATOR-KEY-MUST-NOT-LEAVE",
-      [TRANSLATE_ENDPOINT_ENV]: await stub.url(),
-    });
+    const created = createTranslationProviderFromEnv(
+      {
+        [TRANSLATE_API_KEY_ENV]: "REAL-OPERATOR-KEY-MUST-NOT-LEAVE",
+        [TRANSLATE_ENDPOINT_ENV]: await stub.url(),
+      },
+      DEFAULT_TRANSLATION_MODEL,
+    );
     expect(created.isOk()).toBe(true);
     if (created.isErr()) {
       return;
@@ -307,14 +310,21 @@ describe("OpenAI translation adapter (local stub)", () => {
 
   it("needs no credential for loopback but fails closed for production", () => {
     expect(
-      createTranslationProviderFromEnv({ [TRANSLATE_ENDPOINT_ENV]: "http://127.0.0.1:9" }).isOk(),
+      createTranslationProviderFromEnv(
+        { [TRANSLATE_ENDPOINT_ENV]: "http://127.0.0.1:9" },
+        DEFAULT_TRANSLATION_MODEL,
+      ).isOk(),
     ).toBe(true);
-    const missing = createTranslationProviderFromEnv({
-      URBUDDY_META_API_KEY: "wrong-provider-fixture",
-    });
+    const missing = createTranslationProviderFromEnv(
+      { URBUDDY_META_API_KEY: "wrong-provider-fixture" },
+      DEFAULT_TRANSLATION_MODEL,
+    );
     expect(JSON.stringify(missing)).not.toContain("wrong-provider-fixture");
     expect(
-      createTranslationProviderFromEnv({ [TRANSLATE_API_KEY_ENV]: "translation-fixture" }).isOk(),
+      createTranslationProviderFromEnv(
+        { [TRANSLATE_API_KEY_ENV]: "translation-fixture" },
+        DEFAULT_TRANSLATION_MODEL,
+      ).isOk(),
     ).toBe(true);
     expect(missing.isErr()).toBe(true);
     if (missing.isErr()) {
@@ -327,12 +337,16 @@ describe("OpenAI translation adapter (local stub)", () => {
       createOpenAITranslationProvider({
         apiKey: "key",
         testEndpoint: "https://evil.example.com/v1",
+        modelId: DEFAULT_TRANSLATION_MODEL,
       }),
     ).toThrow();
-    const created = createTranslationProviderFromEnv({
-      [TRANSLATE_API_KEY_ENV]: "key",
-      [TRANSLATE_ENDPOINT_ENV]: "https://evil.example.com/v1",
-    });
+    const created = createTranslationProviderFromEnv(
+      {
+        [TRANSLATE_API_KEY_ENV]: "key",
+        [TRANSLATE_ENDPOINT_ENV]: "https://evil.example.com/v1",
+      },
+      DEFAULT_TRANSLATION_MODEL,
+    );
     expect(created.isErr()).toBe(true);
   });
 
@@ -344,7 +358,7 @@ describe("OpenAI translation adapter (local stub)", () => {
           id: "x",
           object: "chat.completion",
           created: 1,
-          model: OPENAI_TRANSLATION_MODEL_ID,
+          model: DEFAULT_TRANSLATION_MODEL,
           choices: [
             {
               index: 0,
@@ -359,6 +373,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const provider = createOpenAITranslationProvider({
       apiKey: "key",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = await provider.translate(
       buildTranslationRequest(
@@ -392,6 +407,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const provider = createOpenAITranslationProvider({
       apiKey: "key",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = await provider.translate(
       buildTranslationRequest(
@@ -405,7 +421,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       code: "INTERNAL",
       details: {
         provider: "openai",
-        model: OPENAI_TRANSLATION_MODEL_ID,
+        model: DEFAULT_TRANSLATION_MODEL,
         category,
         httpStatus: String(status),
         ...(status === 500 ? {} : { providerCode: code, requestId: "req_1234567890" }),
@@ -420,6 +436,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const provider = createOpenAITranslationProvider({
       apiKey: "key",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = await provider.translate(
       buildTranslationRequest(
@@ -441,6 +458,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       apiKey: "key",
       testEndpoint: await stub.url(),
       timeoutMs: 100,
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const started = Date.now();
     const outcome = await provider.translate(
@@ -467,6 +485,7 @@ describe("OpenAI translation adapter (local stub)", () => {
       apiKey: "key",
       testEndpoint: await stub.url(),
       timeoutMs: 1_000,
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const outcome = provider.translate(
       buildTranslationRequest("Hello.", [], DEFAULT_TRANSLATION_LANGUAGES, controller.signal),
@@ -490,6 +509,7 @@ describe("OpenAI translation adapter (local stub)", () => {
     const provider = createOpenAITranslationProvider({
       apiKey: "key",
       testEndpoint: await stub.url(),
+      modelId: DEFAULT_TRANSLATION_MODEL,
     });
     const controller = new AbortController();
     controller.abort();

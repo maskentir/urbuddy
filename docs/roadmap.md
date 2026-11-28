@@ -97,8 +97,8 @@ original partial transcripts. Provisional translation and snapshot
 policies remain experimental.
 
 The owner approved an exception to allow merging the experimental
-implementation before qualification, subject to final review of PR #11.
-The semantic acceptance gate and real-time product outcome still apply.
+implementation before qualification. PR #11 was merged as `ad7ca4a`; the
+semantic acceptance gate and real-time product outcome still apply.
 Human bilingual adjudication, sustained committed throughput, end-to-end
 latency, and useful provisional translation remain outstanding release
 requirements. [Model selection and evidence](../evaluation/language/model-selection.md)

@@ -34,7 +34,10 @@
     "prebuild": "rm -rf dist",
     "lab:muse-qualification": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/qualification/run-muse.tsx",
     "lab:muse-qualification:fixture": "node lab/audio-slice/qualification/generate-audio.mjs",
-    "lab:muse-qualification:evaluate": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/qualification/evaluate.ts"
+    "lab:muse-qualification:evaluate": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/qualification/evaluate.ts",
+    "lab:comprehension": "vitest run --config lab/audio-slice/vitest.config.ts",
+    "lab:comprehension:offline": "node lab/audio-slice/qualification/loopback-comprehension.mjs",
+    "lab:comprehension:translate": "tsx --tsconfig lab/audio-slice/tsconfig.json lab/audio-slice/qualification/run-translation.ts"
   },
   "dependencies": {
     "@langchain/core": "1.5.1",

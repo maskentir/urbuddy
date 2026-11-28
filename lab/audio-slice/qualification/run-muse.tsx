@@ -8,9 +8,18 @@ import React from "react";
 
 import { openWavSource } from "../../../src/adapters/audio/wav-source.js";
 import { createMuseProviderFromEnv } from "../../../src/adapters/speech/muse.js";
+import {
+  createTranslationProviderFromEnv,
+  SUPPORTED_TRANSLATION_MODELS,
+} from "../../../src/adapters/translation/openai.js";
 import { loadOperationEnvironment } from "../../../src/modules/config/environment.js";
+import {
+  DEFAULT_TRANSLATION_MODEL,
+  loadTranslationConfig,
+} from "../../../src/modules/config/translation.js";
 import type { CaptureSource, SourceItem } from "../../../src/modules/perception/audio.js";
 import { runTranscription, type TranscriptEvent } from "../../../src/modules/perception/speech.js";
+import { ComprehensionEngine } from "../comprehension.js";
 import { RuntimeFeed } from "../feed.js";
 import { AdaptiveApp, AdaptiveScreen, type AppController } from "../screen.js";
 import { actUser, initialSession, touchLiveView, type Session } from "../session.js";
@@ -33,6 +42,7 @@ import { qualificationTimeouts, timeoutDecision } from "./limits.js";
 import { FIXTURE_PROVENANCE, formatPreflight, runPreflight } from "./preflight.js";
 import { createRenderObserver } from "./render-observer.js";
 import { decideRender } from "./render-policy.js";
+import { formatTranslationPreflight, translationPreflight } from "./translation-preflight.js";
 
 const HELP = `urbuddy Muse STT qualification (real provider, paid, owner authorized)
 
@@ -74,6 +84,8 @@ const { values } = parseArgs({
     vocabulary: { type: "string" },
     headless: { type: "boolean" },
     "render-progress": { type: "boolean" },
+    translate: { type: "boolean" },
+    "translation-model": { type: "string" },
     loopback: { type: "string" },
     output: { type: "string" },
   },
@@ -141,6 +153,28 @@ const manifest = JSON.parse(readFileSync(DEFAULT_MANIFEST, "utf8")) as {
   spans: Record<string, { startMs: number; durationMs: number }>;
 };
 
+const translateEnabled = values.translate === true;
+const translationModel = values["translation-model"] ?? DEFAULT_TRANSLATION_MODEL;
+const translationConfig = loadTranslationConfig(translateEnabled, {}, env);
+if (translationConfig.isErr()) {
+  throw new Error(`translation configuration failed: ${translationConfig.error.message}`);
+}
+const translationLoopback = env["URBUDDY_TRANSLATE_ENDPOINT"] !== undefined;
+const translationPreflightResult = translationPreflight({
+  enabled: translateEnabled,
+  env,
+  model: translationModel,
+  supportedModels: SUPPORTED_TRANSLATION_MODELS,
+  maxRequests: 16,
+  maxOutputTokens: 1_024,
+  maxContextUtterances: 5,
+  maxInputTokensPerRequest: 600,
+  sourceLanguage: translationConfig.value.enabled ? translationConfig.value.sourceLanguage : "auto",
+  targetLanguage: translationConfig.value.enabled ? translationConfig.value.targetLanguage : "id",
+  loopback: translationLoopback,
+});
+process.stdout.write(`${formatTranslationPreflight(translationPreflightResult)}\n`);
+
 const preflight = runPreflight({
   env,
   providerId: env["URBUDDY_STT_PROVIDER"] ?? "muse",
@@ -169,7 +203,7 @@ process.stdout.write(
     `connection ${connectionSeconds}s and finalization ${drainSeconds}s, ` +
     `watchdog ${maxAudioSeconds + connectionSeconds + drainSeconds}s\n`,
 );
-if (preflight.blocked || !budget.allowed) {
+if (preflight.blocked || !budget.allowed || translationPreflightResult.blocked) {
   process.stdout.write(
     "\nNo provider request was issued. Exact launch command after owner authorization:\n" +
       "  pnpm lab:muse-qualification -- --owner-authorized --authorization <owner-reference>\n",
@@ -188,10 +222,15 @@ if (opened.isErr()) {
 const lines: TraceRow[] = [];
 const startedMonoMs = performance.now();
 const monoNow = (): number => Math.round((performance.now() - startedMonoMs) * 1000) / 1000;
-const emit = (kind: string, detail: string, data?: Readonly<Record<string, unknown>>): void => {
+const emit = (
+  kind: string,
+  detail: string,
+  data?: Readonly<Record<string, unknown>>,
+  monoMs: number = monoNow(),
+): void => {
   lines.push({
     kind,
-    monoMs: monoNow(),
+    monoMs: Math.round(monoMs * 1000) / 1000,
     elapsedMs: Math.round(performance.now() - startedMonoMs),
     detail,
     ...(data === undefined ? {} : { data }),
@@ -238,6 +277,7 @@ if (provider.isErr()) {
   throw new Error(`provider configuration failed: ${provider.error.message}`);
 }
 
+let comprehension: ComprehensionEngine | undefined;
 const feed = new RuntimeFeed({
   sessionId: "muse-qualification",
   streamId: "main",
@@ -246,10 +286,34 @@ const feed = new RuntimeFeed({
   translations: [],
   intelligence: [],
   gapSkips: [],
+  onOutput: (output) => {
+    comprehension?.accept(output);
+  },
 });
 feed.start();
 
 const operation = new AbortController();
+if (translationConfig.value.enabled) {
+  const translator = createTranslationProviderFromEnv(env, translationModel);
+  if (translator.isErr()) {
+    throw new Error(`translation provider failed: ${translator.error.message}`);
+  }
+  comprehension = new ComprehensionEngine({
+    provider: translator.value,
+    languages: translationConfig.value,
+    signal: operation.signal,
+    domain: feed.domain,
+    enableProvisionals: false,
+    onPublished: () => {
+      requestRender();
+    },
+  });
+  emit(
+    "translation-enabled",
+    `model=${translator.value.modelId} provider=${translator.value.providerId}`,
+    { model: translator.value.modelId, providerId: translator.value.providerId },
+  );
+}
 let transmittedFrames = 0;
 let pairingMismatch = 0;
 emit("session-initiation", `provider=muse model=${model} mode=${mode}`, {
@@ -347,10 +411,16 @@ const takePending = (
 const holder: { session: Session } = {
   session: { ...initialSession(feed.domain), running: true, assistanceEnabled: false },
 };
-let finished = false;
+let requestedExitCode: number | undefined;
+const requestShutdown = (code: number): void => {
+  if (requestedExitCode !== undefined) return;
+  requestedExitCode = code;
+  operation.abort();
+};
+const interrupt = (): void => requestShutdown(130);
+const terminate = (): void => requestShutdown(143);
+
 const finish = (code: number): void => {
-  if (finished) return;
-  finished = true;
   const cpu = process.cpuUsage();
   for (const mark of feed.instrumentation.applied) {
     emit("runtime-applied", `${mark.utteranceId} r${mark.revision}`, {
@@ -425,7 +495,7 @@ const controller: AppController = {
   pauseToggle: () => {
     emit("pause-unavailable", "the live qualification has no local playback to pause");
   },
-  shutdown: finish,
+  shutdown: requestShutdown,
   snapshot: () => holder.session,
   clockMs: () => Math.round(performance.now() - startedMonoMs),
 };
@@ -493,7 +563,9 @@ const renderObserver = createRenderObserver(
   () => monoNow(),
 );
 
+const renderFlushes: Promise<void>[] = [];
 const requestRender = (): void => {
+  if (operation.signal.aborted) return;
   const target = latestUtterance();
   holder.session = touchLiveView({
     ...holder.session,
@@ -510,11 +582,13 @@ const requestRender = (): void => {
     return;
   }
   app.rerender(<AdaptiveApp controller={controller} />);
-  void app.waitUntilRenderFlush().then(() => {
-    const written = output.slice(from).join("");
-    outputOffset = output.length;
-    renderObserver.complete(handle, written);
-  });
+  renderFlushes.push(
+    app.waitUntilRenderFlush().then(() => {
+      const written = output.slice(from).join("");
+      outputOffset = output.length;
+      renderObserver.complete(handle, written);
+    }),
+  );
 };
 
 const segmentEnds = Object.entries(manifest.spans)
@@ -542,6 +616,9 @@ const clockTimer = setInterval(() => {
   requestRender();
 }, 250);
 
+process.on("SIGINT", interrupt);
+process.on("SIGTERM", terminate);
+
 const transcription = await runTranscription({
   source: recordingSource,
   provider: instrumented.provider,
@@ -550,6 +627,7 @@ const transcription = await runTranscription({
   keywords,
   durationMs: watchdogMs,
   onEvent: async (event: TranscriptEvent) => {
+    if (operation.signal.aborted) return;
     const elapsed = Math.round(performance.now() - startedMonoMs);
     while (segmentIndex < segmentEnds.length) {
       const segment = segmentEnds[segmentIndex];
@@ -580,6 +658,7 @@ const transcription = await runTranscription({
     if (event.type === "discontinuity") {
       emit("reducer-accepted-discontinuity", event.detail, { reason: event.reason });
     }
+    comprehension?.ingest(event);
     feed.ingestCanonicalEvent(event, elapsed);
     await feed.idle();
     const decision = decideRender(
@@ -591,15 +670,18 @@ const transcription = await runTranscription({
   },
 });
 
+clearInterval(clockTimer);
+let failed = false;
 if (transcription.isErr()) {
-  emit("failure", `${transcription.error.code}: ${transcription.error.message}`, {
-    code: transcription.error.code,
-    message: transcription.error.message,
+  const { code, message, details } = transcription.error;
+  const cleanup = details?.["cleanup"];
+  failed = requestedExitCode === undefined || code !== "CANCELLED" || cleanup !== undefined;
+  if (failed) operation.abort();
+  emit(failed ? "failure" : "transcription-cancelled", `${code}: ${message}`, {
+    code,
+    message,
+    ...(cleanup === undefined ? {} : { cleanup }),
   });
-  feed.abort();
-  await feed.completion();
-  clearInterval(clockTimer);
-  finish(1);
 } else {
   const summary = transcription.value;
   emit(
@@ -617,9 +699,78 @@ if (transcription.isErr()) {
       providerSessionId: summary.providerSessionId ?? "none",
     },
   );
-  feed.finish();
-  await feed.completion();
-  clearInterval(clockTimer);
-  process.stdout.write(`\n${renderFrame()}\n`);
-  finish(0);
 }
+
+if (comprehension !== undefined) {
+  const summary = await comprehension.finish();
+  const settlement = {
+    committed: summary.committed,
+    failed: summary.failedInvocations,
+    cancelled: summary.cancelledInvocations,
+    unresolved: summary.unresolvedInvocations,
+    unresolvedPublication: summary.unresolvedPublication,
+    publicationFailures: summary.publicationFailures,
+  };
+  failed ||=
+    settlement.unresolved > 0 ||
+    settlement.unresolvedPublication ||
+    settlement.publicationFailures > 0;
+  emit(
+    "translation-settlement",
+    `committed=${settlement.committed} failed=${settlement.failed} cancelled=${settlement.cancelled} ` +
+      `unresolved=${settlement.unresolved} publicationFailures=${settlement.publicationFailures}`,
+    settlement,
+  );
+  for (const observation of comprehension.observations) {
+    emit(`translation-${observation.type}`, `${observation.utteranceId} r${observation.revision}`, {
+      utteranceId: observation.utteranceId,
+      revision: observation.revision,
+      sourceArrivedMs: observation.sourceArrivedMs,
+      queueMs: observation.queueMs,
+      responseMs: observation.responseMs,
+      publicationMs: observation.publicationMs,
+      observedMonoMs: observation.monoMs,
+    });
+  }
+  emit(
+    "translation-summary",
+    `committed=${summary.committed} provisionals=${summary.provisionals} requests=${summary.requests} ` +
+      `responses=${summary.responses} failed=${summary.failedInvocations} cancelled=${summary.cancelledInvocations} ` +
+      `unresolved=${summary.unresolvedInvocations} staleRejected=${summary.staleRejected} degraded=${summary.degraded} ` +
+      `uncovered=${summary.uncovered} inputTokens=${summary.inputTokens ?? "unknown"} ` +
+      `outputTokens=${summary.outputTokens ?? "unknown"}`,
+    {
+      committed: summary.committed,
+      provisionals: summary.provisionals,
+      requests: summary.requests,
+      responses: summary.responses,
+      failedInvocations: summary.failedInvocations,
+      cancelledInvocations: summary.cancelledInvocations,
+      unresolvedInvocations: summary.unresolvedInvocations,
+      staleRejected: summary.staleRejected,
+      degraded: summary.degraded,
+      uncovered: summary.uncovered,
+      inputTokens: summary.inputTokens,
+      outputTokens: summary.outputTokens,
+      providerId: summary.providerId,
+      modelId: summary.modelId,
+      promptVersion: summary.promptVersion,
+    },
+  );
+}
+
+feed.finish();
+await feed.completion();
+if (feed.fatal !== undefined) {
+  failed = true;
+  emit("failure", `${feed.fatal.code}: ${feed.fatal.message}`);
+}
+app?.unmount();
+await app?.waitUntilExit();
+await Promise.all(renderFlushes);
+if (requestedExitCode === undefined && transcription.isOk()) {
+  process.stdout.write(`\n${renderFrame()}\n`);
+}
+process.off("SIGINT", interrupt);
+process.off("SIGTERM", terminate);
+finish(failed ? 1 : (requestedExitCode ?? 0));

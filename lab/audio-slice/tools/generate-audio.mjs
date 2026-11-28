@@ -121,6 +121,6 @@ for (let i = 0; i < totalSamples; i += 1) {
 writeFileSync(join(OUT_DIR, "meeting.wav"), Buffer.concat([header, pcm]));
 writeFileSync(
   join(OUT_DIR, "manifest.json"),
-  JSON.stringify({ sampleRate: SAMPLE_RATE, audioMs: END_SEC * 1000, spans }, null, 2),
+  `${JSON.stringify({ sampleRate: SAMPLE_RATE, audioMs: END_SEC * 1000, spans }, null, 2)}\n`,
 );
 process.stdout.write(`wrote meeting.wav ${(totalSamples * 2 + 44) / 1e6} MB\n`);

@@ -45,14 +45,24 @@ function Caption({
         {timeLabel(item.firstSeenAtMs / 1000)} ·{" "}
         <SpeakerName state={state} speakerKey={item.speakerKey} />
       </Text>
-      {item.translation !== undefined ? <Text>{item.translation.text}</Text> : null}
-      {item.translation === undefined && item.expectsTranslation && item.finalized ? (
-        <Text color="yellow">Terjemahan menyusul…</Text>
-      ) : null}
-      {item.translation === undefined && !item.expectsTranslation ? (
+      {item.translation !== undefined ? (
+        <Box flexDirection="column">
+          <Text>{item.translation.text}</Text>
+          {item.translation.state === "provisional" ? (
+            <Text color="yellow">Terjemahan sementara — belum final.</Text>
+          ) : null}
+          {showOriginal ? <Text color="gray">EN: {item.text}</Text> : null}
+        </Box>
+      ) : (
         <Box flexDirection="column">
           <Text>{item.text}</Text>
-          {item.finalized ? (
+          {item.translationFailure !== undefined ? (
+            <Text color="red">Terjemahan gagal: {item.translationFailure.reason}</Text>
+          ) : null}
+          {item.translationFailure === undefined && item.expectsTranslation && item.finalized ? (
+            <Text color="yellow">Terjemahan menyusul…</Text>
+          ) : null}
+          {item.translationFailure === undefined && !item.expectsTranslation && item.finalized ? (
             <Text color="gray">
               {state.assistanceEnabled === false
                 ? "Terjemahan tidak diaktifkan."
@@ -60,10 +70,7 @@ function Caption({
             </Text>
           ) : null}
         </Box>
-      ) : null}
-      {item.translation !== undefined && showOriginal ? (
-        <Text color="gray">EN: {item.text}</Text>
-      ) : null}
+      )}
       {item.assists && item.vocab !== undefined ? (
         <Text color="cyan">Kata: {item.vocab}</Text>
       ) : null}
