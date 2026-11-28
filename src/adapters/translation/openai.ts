@@ -14,12 +14,12 @@ import { err, ok, type Result } from "neverthrow";
 import { z } from "zod";
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
-export const OPENAI_TRANSLATION_MODEL_ID = "gpt-6-luna";
+export const SUPPORTED_TRANSLATION_MODELS = ["gpt-6-luna", "gpt-6.1-terra"] as const;
 export const TRANSLATE_ENDPOINT_ENV = "URBUDDY_TRANSLATE_ENDPOINT";
 export const TRANSLATE_API_KEY_ENV = "URBUDDY_OPENAI_API_KEY";
 const TRANSLATE_LOOPBACK_CREDENTIAL = "loopback-translate-credential";
 const REQUEST_TIMEOUT_MS = 8_000;
-const MODELS = new Set([OPENAI_TRANSLATION_MODEL_ID, "gpt-6.1-terra"]);
+const MODELS = new Set<string>(SUPPORTED_TRANSLATION_MODELS);
 
 const providerCodes = z.enum([
   "invalid_api_key",
@@ -126,13 +126,13 @@ export function isLoopbackTranslationEndpoint(raw: string | undefined): boolean 
 export interface OpenAITranslationOptions {
   readonly apiKey: string;
   readonly testEndpoint?: string;
-  readonly modelId?: string;
+  readonly modelId: string;
   readonly timeoutMs?: number;
 }
 
 export function createTranslationProviderFromEnv(
   env: Readonly<Record<string, string | undefined>>,
-  modelId = OPENAI_TRANSLATION_MODEL_ID,
+  modelId: string,
 ): Result<TranslationProvider, AppError> {
   const endpoint = resolveTranslationEndpoint(env[TRANSLATE_ENDPOINT_ENV]);
   if (endpoint.isErr()) {
@@ -179,7 +179,7 @@ export function createOpenAITranslationProvider(
     throw appError("CONFIG_INVALID", "translation test endpoint must be loopback");
   }
   const apiKey = loopback ? TRANSLATE_LOOPBACK_CREDENTIAL : options.apiKey.trim();
-  const modelId = options.modelId ?? OPENAI_TRANSLATION_MODEL_ID;
+  const modelId = options.modelId;
   if (!apiKey || !MODELS.has(modelId)) {
     throw appError("CONFIG_INVALID", "invalid OpenAI translation credential or model");
   }

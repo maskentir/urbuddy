@@ -8,6 +8,17 @@ export interface RosterEntry {
   readonly role: string;
 }
 
+export type TranslationLifecycle = "provisional" | "committed";
+
+export interface ProjectedTranslation {
+  readonly text: string;
+  readonly revision: number;
+  readonly state: TranslationLifecycle;
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly promptVersion?: string;
+}
+
 export interface ProjectedUtterance {
   readonly key: string;
   readonly turnRef: string;
@@ -20,7 +31,9 @@ export interface ProjectedUtterance {
   vocab?: string;
   intent?: string;
   expectsTranslation: boolean;
-  translation?: { text: string; revision: number };
+  translation?: ProjectedTranslation | undefined;
+  translationFailure?: { readonly reason: string } | undefined;
+  translationSuperseded?: boolean | undefined;
 }
 
 export type SuggestionStatus = "ready" | "changed" | "invalidated" | "insufficient" | "pending";
@@ -221,7 +234,28 @@ export function applyTranscriptDetail(state: DomainState, event: TranscriptEvent
 }
 
 export function applyTranslation(state: DomainState, event: TranslationEvent): void {
-  if (event.type !== "committed") {
+  if (event.type === "degraded") {
+    const degraded = state.byKey.get(event.sourceUtteranceId);
+    if (degraded !== undefined) {
+      degraded.translationFailure = { reason: event.reason };
+      degraded.translation = undefined;
+    }
+    state.rejected.push({ kind: "translation", reason: `degraded: ${event.reason}` });
+    return;
+  }
+  if (event.type === "invalidated") {
+    const invalidated = state.byKey.get(event.sourceUtteranceId);
+    if (invalidated !== undefined) {
+      invalidated.translationSuperseded = true;
+      invalidated.translation = undefined;
+    }
+    state.rejected.push({
+      kind: "translation",
+      reason: `invalidated for ${event.sourceUtteranceId} r${event.sourceRevision}`,
+    });
+    return;
+  }
+  if (event.type !== "provisional" && event.type !== "committed") {
     state.rejected.push({
       kind: "translation",
       reason: `unsupported translation event ${event.type}`,
@@ -245,7 +279,23 @@ export function applyTranslation(state: DomainState, event: TranslationEvent): v
     });
     return;
   }
-  target.translation = { text: event.text, revision: event.sourceRevision };
+  if (target.translation?.state === "committed" && event.type === "provisional") {
+    state.rejected.push({
+      kind: "translation",
+      reason: `provisional for ${event.sourceUtteranceId} arrived after a committed translation`,
+    });
+    return;
+  }
+  target.translation = {
+    text: event.text,
+    revision: event.sourceRevision,
+    state: event.type,
+    providerId: event.providerId,
+    modelId: event.modelId,
+    promptVersion: event.promptVersion,
+  };
+  target.translationFailure = undefined;
+  target.expectsTranslation = true;
 }
 
 export function applyIntelligence(

@@ -1,5 +1,5 @@
 import {
-  createMuseProviderFromEnv,
+  MUSE_MODEL_ID,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
   resolveMuseEndpoint,
 } from "../../../src/adapters/speech/muse.js";
@@ -84,13 +84,12 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     `provider=${input.providerId} (no fallback is permitted)`,
   );
 
-  const provider = createMuseProviderFromEnv(input.env, input.modelId);
   add(
     "explicit-model-selection",
-    provider.isOk() ? "pass" : "fail",
-    provider.isOk()
-      ? `model=${input.modelId} accepted by the production provider factory`
-      : `model=${input.modelId} rejected: ${provider.error.message}`,
+    input.modelId === MUSE_MODEL_ID ? "pass" : "fail",
+    input.modelId === MUSE_MODEL_ID
+      ? `model=${input.modelId} is the supported Muse model`
+      : `model=${input.modelId} is not the supported Muse model ${MUSE_MODEL_ID}`,
   );
 
   const endpointOverride = input.env[MUSE_TRANSCRIBE_ENDPOINT_ENV];
@@ -157,7 +156,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   );
   add(
     "contributor-mode",
-    provider.isOk() && (endpoint === MUSE_OFFICIAL_ENDPOINT || loopback) ? "pass" : "fail",
+    endpoint === MUSE_OFFICIAL_ENDPOINT || loopback ? "pass" : "fail",
     "the documented production transcription model on the official endpoint is used",
   );
   add(

@@ -8,9 +8,18 @@ import React from "react";
 
 import { openWavSource } from "../../../src/adapters/audio/wav-source.js";
 import { createMuseProviderFromEnv } from "../../../src/adapters/speech/muse.js";
+import {
+  createTranslationProviderFromEnv,
+  SUPPORTED_TRANSLATION_MODELS,
+} from "../../../src/adapters/translation/openai.js";
 import { loadOperationEnvironment } from "../../../src/modules/config/environment.js";
+import {
+  DEFAULT_TRANSLATION_MODEL,
+  loadTranslationConfig,
+} from "../../../src/modules/config/translation.js";
 import type { CaptureSource, SourceItem } from "../../../src/modules/perception/audio.js";
 import { runTranscription, type TranscriptEvent } from "../../../src/modules/perception/speech.js";
+import { ComprehensionEngine } from "../comprehension.js";
 import { RuntimeFeed } from "../feed.js";
 import { AdaptiveApp, AdaptiveScreen, type AppController } from "../screen.js";
 import { actUser, initialSession, touchLiveView, type Session } from "../session.js";
@@ -33,6 +42,7 @@ import { qualificationTimeouts, timeoutDecision } from "./limits.js";
 import { FIXTURE_PROVENANCE, formatPreflight, runPreflight } from "./preflight.js";
 import { createRenderObserver } from "./render-observer.js";
 import { decideRender } from "./render-policy.js";
+import { formatTranslationPreflight, translationPreflight } from "./translation-preflight.js";
 
 const HELP = `urbuddy Muse STT qualification (real provider, paid, owner authorized)
 
@@ -74,6 +84,8 @@ const { values } = parseArgs({
     vocabulary: { type: "string" },
     headless: { type: "boolean" },
     "render-progress": { type: "boolean" },
+    translate: { type: "boolean" },
+    "translation-model": { type: "string" },
     loopback: { type: "string" },
     output: { type: "string" },
   },
@@ -141,6 +153,28 @@ const manifest = JSON.parse(readFileSync(DEFAULT_MANIFEST, "utf8")) as {
   spans: Record<string, { startMs: number; durationMs: number }>;
 };
 
+const translateEnabled = values.translate === true;
+const translationModel = values["translation-model"] ?? DEFAULT_TRANSLATION_MODEL;
+const translationConfig = loadTranslationConfig(translateEnabled, {}, env);
+if (translationConfig.isErr()) {
+  throw new Error(`translation configuration failed: ${translationConfig.error.message}`);
+}
+const translationLoopback = env["URBUDDY_TRANSLATE_ENDPOINT"] !== undefined;
+const translationPreflightResult = translationPreflight({
+  enabled: translateEnabled,
+  env,
+  model: translationModel,
+  supportedModels: SUPPORTED_TRANSLATION_MODELS,
+  maxRequests: 16,
+  maxOutputTokens: 1_024,
+  maxContextUtterances: 5,
+  maxInputTokensPerRequest: 600,
+  sourceLanguage: translationConfig.value.enabled ? translationConfig.value.sourceLanguage : "auto",
+  targetLanguage: translationConfig.value.enabled ? translationConfig.value.targetLanguage : "id",
+  loopback: translationLoopback,
+});
+process.stdout.write(`${formatTranslationPreflight(translationPreflightResult)}\n`);
+
 const preflight = runPreflight({
   env,
   providerId: env["URBUDDY_STT_PROVIDER"] ?? "muse",
@@ -169,7 +203,7 @@ process.stdout.write(
     `connection ${connectionSeconds}s and finalization ${drainSeconds}s, ` +
     `watchdog ${maxAudioSeconds + connectionSeconds + drainSeconds}s\n`,
 );
-if (preflight.blocked || !budget.allowed) {
+if (preflight.blocked || !budget.allowed || translationPreflightResult.blocked) {
   process.stdout.write(
     "\nNo provider request was issued. Exact launch command after owner authorization:\n" +
       "  pnpm lab:muse-qualification -- --owner-authorized --authorization <owner-reference>\n",
@@ -250,6 +284,25 @@ const feed = new RuntimeFeed({
 feed.start();
 
 const operation = new AbortController();
+let comprehension: ComprehensionEngine | undefined;
+if (translationConfig.value.enabled) {
+  const translator = createTranslationProviderFromEnv(env, translationModel);
+  if (translator.isErr()) {
+    throw new Error(`translation provider failed: ${translator.error.message}`);
+  }
+  comprehension = new ComprehensionEngine({
+    provider: translator.value,
+    languages: translationConfig.value,
+    signal: operation.signal,
+    domain: feed.domain,
+    enableProvisionals: false,
+  });
+  emit(
+    "translation-enabled",
+    `model=${translator.value.modelId} provider=${translator.value.providerId}`,
+    { model: translator.value.modelId, providerId: translator.value.providerId },
+  );
+}
 let transmittedFrames = 0;
 let pairingMismatch = 0;
 emit("session-initiation", `provider=muse model=${model} mode=${mode}`, {
@@ -582,6 +635,9 @@ const transcription = await runTranscription({
     }
     feed.ingestCanonicalEvent(event, elapsed);
     await feed.idle();
+    if (event.type === "partial" || event.type === "final" || event.type === "discontinuity") {
+      comprehension?.consume(event);
+    }
     const decision = decideRender(
       event.type === "partial" ? "partial" : event.type === "final" ? "final" : "discontinuity",
       0,
@@ -617,6 +673,34 @@ if (transcription.isErr()) {
       providerSessionId: summary.providerSessionId ?? "none",
     },
   );
+  if (comprehension !== undefined) {
+    const summary = await comprehension.finish();
+    emit(
+      "translation-summary",
+      `committed=${summary.committed} provisionals=${summary.provisionals} requests=${summary.requests} ` +
+        `responses=${summary.responses} failed=${summary.failedInvocations} cancelled=${summary.cancelledInvocations} ` +
+        `unresolved=${summary.unresolvedInvocations} staleRejected=${summary.staleRejected} degraded=${summary.degraded} ` +
+        `uncovered=${summary.uncovered} inputTokens=${summary.inputTokens ?? "unknown"} ` +
+        `outputTokens=${summary.outputTokens ?? "unknown"}`,
+      {
+        committed: summary.committed,
+        provisionals: summary.provisionals,
+        requests: summary.requests,
+        responses: summary.responses,
+        failedInvocations: summary.failedInvocations,
+        cancelledInvocations: summary.cancelledInvocations,
+        unresolvedInvocations: summary.unresolvedInvocations,
+        staleRejected: summary.staleRejected,
+        degraded: summary.degraded,
+        uncovered: summary.uncovered,
+        inputTokens: summary.inputTokens,
+        outputTokens: summary.outputTokens,
+        providerId: summary.providerId,
+        modelId: summary.modelId,
+        promptVersion: summary.promptVersion,
+      },
+    );
+  }
   feed.finish();
   await feed.completion();
   clearInterval(clockTimer);

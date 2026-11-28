@@ -25,6 +25,7 @@ export const DEFAULT_TRANSLATION_LANGUAGES: TranslationLanguages = Object.freeze
   sourceLanguage: "auto",
   targetLanguage: "id",
 });
+export const TRANSLATION_MODEL_CONFIG_VERSION = "translation-model-v1";
 export const DEFAULT_TRANSLATION_MODEL = "gpt-6.1-terra";
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language", fallback: "none" });
