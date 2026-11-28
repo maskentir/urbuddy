@@ -58,6 +58,17 @@ The states are distinct and must not be conflated.
 | #12 | event-driven runtime integration and Muse qualification path        | master                        | **draft, hold**             | `feat/muse-stt-qualification`       |
 | #13 | contextual comprehension through the existing translation scheduler | `feat/muse-stt-qualification` | **draft, changes required** | `feat/contextual-comprehension`     |
 
+## Milestone 4 state after the PR #12 merge
+
+| Item                       | Value                                             |
+| -------------------------- | ------------------------------------------------- |
+| Master before              | `ad7ca4a43424315f23292dc0fd96e27d9cc1d437`        |
+| Master after               | `88c166a108fc70e41bbfc3081239c4be7eb893ea`        |
+| Merged revision reviewed   | `9d52584d2d163304474eccddf3e83f6cf4e0c0a2`        |
+| Tree equivalence           | the merged tree is identical to the reviewed tree |
+| Reachable binary artifacts | none                                              |
+| Milestone 4 semantic gate  | **open**                                          |
+
 ## What is not claimed
 
 - No provider model is semantically qualified. The 27 November comparison
