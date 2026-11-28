@@ -101,6 +101,25 @@ runs before any provider request and blocks on a missing credential, an
 unsupported model, an unauthorised endpoint override, or an invalid
 ceiling.
 
+### Paid translation launch
+
+```sh
+pnpm lab:comprehension:translate -- \
+  --env-file .env \
+  --trace lab/audio-slice/qualification/trace/<captured>.jsonl \
+  --model gpt-6.1-terra \
+  --max-requests 16 \
+  --max-input-bytes 16000 \
+  --owner-authorized \
+  --authorization <translation-owner-reference>
+```
+
+The command consumes captured canonical transcript events. It never
+constructs a speech provider, never transmits audio, and never consumes a
+Muse attempt. It refuses to run without a translation specific owner
+authorization and an authorization reference. The Muse authorization is
+not reused.
+
 ## Correction of the C1 evidence claims
 
 The loopback server returns `"id: " + source`. That is an English routing
