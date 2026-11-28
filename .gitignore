@@ -13,3 +13,4 @@ lab/audio-slice/audio/*.wav
 lab/audio-slice/qualification/audio/*.wav
 lab/audio-slice/qualification/audio/
 lab/audio-slice/qualification/trace/
+lab/audio-slice/qualification/state/
