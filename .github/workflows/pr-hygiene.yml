@@ -3,7 +3,7 @@ name: pr-hygiene
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
-    branches: [master]
+    branches: [master, feat/muse-stt-qualification]
 
 permissions:
   contents: read

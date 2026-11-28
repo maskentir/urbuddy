@@ -222,10 +222,15 @@ if (opened.isErr()) {
 const lines: TraceRow[] = [];
 const startedMonoMs = performance.now();
 const monoNow = (): number => Math.round((performance.now() - startedMonoMs) * 1000) / 1000;
-const emit = (kind: string, detail: string, data?: Readonly<Record<string, unknown>>): void => {
+const emit = (
+  kind: string,
+  detail: string,
+  data?: Readonly<Record<string, unknown>>,
+  monoMs: number = monoNow(),
+): void => {
   lines.push({
     kind,
-    monoMs: monoNow(),
+    monoMs: Math.round(monoMs * 1000) / 1000,
     elapsedMs: Math.round(performance.now() - startedMonoMs),
     detail,
     ...(data === undefined ? {} : { data }),
@@ -272,6 +277,7 @@ if (provider.isErr()) {
   throw new Error(`provider configuration failed: ${provider.error.message}`);
 }
 
+let comprehension: ComprehensionEngine | undefined;
 const feed = new RuntimeFeed({
   sessionId: "muse-qualification",
   streamId: "main",
@@ -280,11 +286,13 @@ const feed = new RuntimeFeed({
   translations: [],
   intelligence: [],
   gapSkips: [],
+  onOutput: (output) => {
+    comprehension?.accept(output);
+  },
 });
 feed.start();
 
 const operation = new AbortController();
-let comprehension: ComprehensionEngine | undefined;
 if (translationConfig.value.enabled) {
   const translator = createTranslationProviderFromEnv(env, translationModel);
   if (translator.isErr()) {
@@ -296,6 +304,9 @@ if (translationConfig.value.enabled) {
     signal: operation.signal,
     domain: feed.domain,
     enableProvisionals: false,
+    onPublished: () => {
+      requestRender();
+    },
   });
   emit(
     "translation-enabled",
@@ -635,9 +646,7 @@ const transcription = await runTranscription({
     }
     feed.ingestCanonicalEvent(event, elapsed);
     await feed.idle();
-    if (event.type === "partial" || event.type === "final" || event.type === "discontinuity") {
-      comprehension?.consume(event);
-    }
+    comprehension?.ingest(event);
     const decision = decideRender(
       event.type === "partial" ? "partial" : event.type === "final" ? "final" : "discontinuity",
       0,
@@ -686,7 +695,9 @@ if (transcription.isErr()) {
           queueMs: observation.queueMs,
           responseMs: observation.responseMs,
           publicationMs: observation.publicationMs,
+          observedMonoMs: observation.monoMs,
         },
+        observation.monoMs,
       );
     }
     emit(

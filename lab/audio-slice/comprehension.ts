@@ -6,6 +6,7 @@ import type {
 } from "../../src/modules/language/translation.js";
 import { TranslationScheduler } from "../../src/modules/language/translation.js";
 import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
+import type { SessionOutput } from "../../src/modules/session/events.js";
 
 import { applyTranslation, type DomainState } from "./projection.js";
 
@@ -16,6 +17,8 @@ export interface ComprehensionOptions {
   readonly domain: DomainState;
   readonly enableProvisionals?: boolean;
   readonly now?: () => number;
+  readonly maxObservations?: number;
+  readonly onPublished?: (event: TranslationEvent) => void;
 }
 
 export interface TranslationObservation {
@@ -29,20 +32,30 @@ export interface TranslationObservation {
   readonly monoMs: number;
 }
 
+const DEFAULT_MAX_OBSERVATIONS = 256;
+
 /**
  * [correctness] The comprehension engine owns the production translation
- * scheduler, so a translation request is always derived from an accepted
- * transcript event and never from the scenario timeline.
+ * scheduler, so a translation request is always derived from a transcript
+ * event the session runtime accepted, never from the scenario timeline and
+ * never from a rejected, duplicate, or stale event.
  */
 export class ComprehensionEngine {
   readonly observations: TranslationObservation[] = [];
   private readonly scheduler: TranslationScheduler;
   private readonly now: () => number;
-  private readonly domain: DomainState;
+  private readonly maxObservations: number;
+  private readonly options: ComprehensionOptions;
+  private readonly canonical = new Map<
+    string,
+    Extract<TranscriptEvent, { type: "partial" | "final" }>
+  >();
+  private consumed = 0;
 
   constructor(options: ComprehensionOptions) {
-    this.domain = options.domain;
+    this.options = options;
     this.now = options.now ?? (() => performance.now());
+    this.maxObservations = options.maxObservations ?? DEFAULT_MAX_OBSERVATIONS;
     this.scheduler = new TranslationScheduler({
       provider: options.provider,
       languages: options.languages,
@@ -53,7 +66,7 @@ export class ComprehensionEngine {
         if (!isCurrent()) {
           return false;
         }
-        this.observations.push({
+        this.record({
           type: event.type,
           utteranceId: event.sourceUtteranceId,
           revision: event.sourceRevision,
@@ -74,17 +87,51 @@ export class ComprehensionEngine {
           monoMs: this.now(),
         });
         applyTranslation(options.domain, event);
+        options.onPublished?.(event);
         return true;
       },
     });
   }
 
-  consume(event: TranscriptEvent): void {
-    if (event.type === "final") {
-      const row = this.domain.byKey.get(event.utteranceId);
-      if (row !== undefined) row.expectsTranslation = true;
+  record(observation: TranslationObservation): void {
+    this.observations.push(observation);
+    if (this.observations.length > this.maxObservations) {
+      this.observations.splice(0, this.observations.length - this.maxObservations);
     }
-    this.scheduler.consume(event);
+  }
+
+  /**
+   * [correctness] A canonical transcript event is only a candidate. It
+   * becomes translation work when the session runtime accepted it.
+   */
+  ingest(event: TranscriptEvent): void {
+    if (event.type === "partial" || event.type === "final") {
+      this.canonical.set(event.utteranceId, event);
+    }
+  }
+
+  accept(output: SessionOutput): void {
+    if (output.type !== "applied") {
+      return;
+    }
+    const candidate = this.canonical.get(output.utteranceId);
+    if (candidate === undefined) {
+      return;
+    }
+    this.consumed += 1;
+    const row = this.options.domain.byKey.get(output.utteranceId);
+    if (row !== undefined && candidate.type === "final") {
+      row.expectsTranslation = true;
+    }
+    this.scheduler.consume({
+      ...candidate,
+      revision: output.revision,
+      text: output.text,
+    });
+  }
+
+  get acceptedEvents(): number {
+    return this.consumed;
   }
 
   finish(): Promise<TranslationSummary> {

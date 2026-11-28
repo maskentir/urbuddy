@@ -2,6 +2,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { renderToString } from "ink";
+import { ok } from "neverthrow";
 import React from "react";
 import { describe, expect, test } from "vitest";
 
@@ -10,6 +11,7 @@ import type { TranscriptEvent } from "../../src/modules/perception/speech.js";
 
 import { ComprehensionEngine } from "./comprehension.js";
 import { RuntimeFeed } from "./feed.js";
+import { createBudgetedProvider } from "./qualification/translation-budget.js";
 import { AdaptiveScreen } from "./screen.js";
 import type { Session, UserState } from "./session.js";
 
@@ -112,6 +114,7 @@ interface Harness {
 }
 
 function createHarness(provider: Parameters<typeof createOpenAITranslationProvider>[0]): Harness {
+  const holder: { engine?: ComprehensionEngine } = {};
   const feed = new RuntimeFeed({
     sessionId: "comprehension",
     streamId: "main",
@@ -120,6 +123,9 @@ function createHarness(provider: Parameters<typeof createOpenAITranslationProvid
     translations: [],
     intelligence: [],
     gapSkips: [],
+    onOutput: (output) => {
+      holder.engine?.accept(output);
+    },
   });
   feed.start();
   const controller = new AbortController();
@@ -128,15 +134,17 @@ function createHarness(provider: Parameters<typeof createOpenAITranslationProvid
     languages: { sourceLanguage: "en", targetLanguage: "id" },
     signal: controller.signal,
     domain: feed.domain,
+    onPublished: () => undefined,
   });
+  holder.engine = engine;
   return {
     feed,
-    engine,
+    engine: engine as ComprehensionEngine,
     controller,
     accept: async (event: TranscriptEvent): Promise<void> => {
       feed.ingestCanonicalEvent(event, 0);
+      engine.ingest(event);
       await feed.idle();
-      engine.consume(event);
     },
     frame: (): string => {
       const session: Session = {
@@ -479,5 +487,66 @@ describe("counterfactual K: an independent transcript", () => {
     } finally {
       await stub.close();
     }
+  });
+});
+
+describe("translation budget", () => {
+  test("an exhausted budget cannot produce an outbound request", async () => {
+    let outbound = 0;
+    const provider = createBudgetedProvider(
+      {
+        providerId: "stub",
+        modelId: "gpt-6.1-terra",
+        translate: async () => {
+          outbound += 1;
+          return ok({ text: "terjemahan" });
+        },
+      },
+      {
+        maxRequests: 1,
+        maxInputBytesPerRequest: 16_000,
+        maxOutputTokens: 1_024,
+        modelId: "gpt-6.1-terra",
+      },
+      () => undefined,
+    );
+    const first = await provider.translate({
+      messages: [{ role: "user", content: "satu" }],
+      signal: new AbortController().signal,
+    });
+    expect(first.isOk()).toBe(true);
+    const second = await provider.translate({
+      messages: [{ role: "user", content: "dua" }],
+      signal: new AbortController().signal,
+    });
+    expect(second.isErr()).toBe(true);
+    expect(outbound).toBe(1);
+  });
+
+  test("an oversized serialized request is refused before the network", async () => {
+    let outbound = 0;
+    const provider = createBudgetedProvider(
+      {
+        providerId: "stub",
+        modelId: "gpt-6.1-terra",
+        translate: async () => {
+          outbound += 1;
+          return ok({ text: "terjemahan" });
+        },
+      },
+      {
+        maxRequests: 8,
+        maxInputBytesPerRequest: 32,
+        maxOutputTokens: 1_024,
+        modelId: "gpt-6.1-terra",
+      },
+      () => undefined,
+    );
+    const outcome = await provider.translate({
+      messages: [{ role: "user", content: "x".repeat(200) }],
+      signal: new AbortController().signal,
+    });
+    expect(outcome.isErr()).toBe(true);
+    expect(outbound).toBe(0);
   });
 });
