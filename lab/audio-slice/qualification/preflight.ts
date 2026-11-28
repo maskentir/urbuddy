@@ -1,5 +1,4 @@
 import {
-  MUSE_MODEL_ID,
   MUSE_TRANSCRIBE_ENDPOINT_ENV,
   resolveMuseEndpoint,
 } from "../../../src/adapters/speech/muse.js";
@@ -52,6 +51,7 @@ const MAX_AUDIO_SECONDS = 30;
 const MAX_ATTEMPTS = 3;
 const MAX_BILLABLE_SECONDS = 90;
 const MAX_SPENDING_CEILING_USD = 0.01;
+const SUPPORTED_MUSE_MODEL = "muse-voice-transcribe-1.0";
 export const PROVIDER_HANDSHAKE_TIMEOUT_SECONDS = 10;
 export const PROVIDER_DRAIN_TIMEOUT_SECONDS = 15;
 const EXPECTED_MAX_COST_USD = 0.0045;
@@ -86,10 +86,10 @@ export function runPreflight(input: PreflightInput): PreflightResult {
 
   add(
     "explicit-model-selection",
-    input.modelId === MUSE_MODEL_ID ? "pass" : "fail",
-    input.modelId === MUSE_MODEL_ID
+    input.modelId === SUPPORTED_MUSE_MODEL ? "pass" : "fail",
+    input.modelId === SUPPORTED_MUSE_MODEL
       ? `model=${input.modelId} is the supported Muse model`
-      : `model=${input.modelId} is not the supported Muse model ${MUSE_MODEL_ID}`,
+      : `model=${input.modelId} is not the supported Muse model ${SUPPORTED_MUSE_MODEL}`,
   );
 
   const endpointOverride = input.env[MUSE_TRANSCRIBE_ENDPOINT_ENV];

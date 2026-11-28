@@ -10,7 +10,7 @@ import { err, ok, type Result } from "neverthrow";
 import WebSocket from "ws";
 import { z } from "zod";
 
-export const MUSE_MODEL_ID = "muse-voice-transcribe-1.0";
+const MUSE_MODEL_ID = "muse-voice-transcribe-1.0";
 const MUSE_REALTIME_URL = "wss://api.meta.ai/v1/asr/realtime";
 
 const handshakeAckSchema = z.object({ sessionId: z.string().min(1) }).strict();
