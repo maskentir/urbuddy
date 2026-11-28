@@ -100,3 +100,100 @@ The preflight is `lab/audio-slice/qualification/translation-preflight.ts`. It
 runs before any provider request and blocks on a missing credential, an
 unsupported model, an unauthorised endpoint override, or an invalid
 ceiling.
+
+## Correction of the C1 evidence claims
+
+The loopback server returns `"id: " + source`. That is an English routing
+sentinel, not an Indonesian translation. The earlier claim that Indonesian
+semantic output was demonstrated is withdrawn. What the loopback actually
+establishes is the plumbing: request admission, revision binding, ordering,
+failure handling, cancellation, and request bounding. It establishes nothing
+about Indonesian wording or meaning.
+
+Where presentation-language behaviour has to be exercised, the authored
+bilingual fixtures in `evaluation/language/comprehension-v1/` are used and
+are labelled as fixtures. The loopback stub now prefixes its output with
+`[fixture]` for the same reason.
+
+The provider request itself is verified to contain the raw source, the
+source and target language, the bounded context, and the glossary, and the
+system prompt is asserted to forbid following spoken instructions. Those are
+deterministic properties and they hold locally.
+
+## Historical semantic evidence reconciliation
+
+The 27 November comparison in `evaluation/language/model-selection.md`
+executed 46 provider invocations against the frozen prompt and the frozen
+corpora. Its results are preserved and are not repeated by default.
+
+| Arm             | Regression v3 | Holdout v1 | Estimated spend             | Median response |
+| --------------- | ------------- | ---------- | --------------------------- | --------------- |
+| `gpt-6.1-terra` | 14/15         | 6/6        | USD 0.006205 + USD 0.002745 | about 2.2 s     |
+| `gpt-6-luna`    | 12/15         | 5/6        | USD 0.000617 + USD 0.000270 | about 1.5 s     |
+
+Neither arm met the frozen criteria. The cases that still require
+adjudication are exactly the ones recorded there:
+
+| Case                  | Arm  | Outstanding decision                                                                                                                  |
+| --------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `attribution-vet-001` | both | Both chose possibility where the frozen rubric requires permission. The source ambiguity verdict is NEEDS HUMAN REVIEW for both arms. |
+| `holdout-ambiguity`   | both | Both kept the telescope attachment open. The separate source-ambiguity verdict is NEEDS HUMAN REVIEW.                                 |
+| `context-pronoun-001` | Luna | Luna omitted the certificate and rendered "once" as a count. Terra passed.                                                            |
+| `commitment-001`      | Luna | Luna excluded exactly noon. Terra passed.                                                                                             |
+| `holdout-referent`    | Luna | Luna left the blue notebook implicit. Terra passed.                                                                                   |
+
+### Coverage of the new comprehension set against the frozen corpus
+
+| New case                                         | Frozen equivalent      | Verdict           |
+| ------------------------------------------------ | ---------------------- | ----------------- |
+| `dev-negation-001`                               | `neg-001`, `neg-002`   | duplicate         |
+| `dev-double-negative-001`                        | none                   | new               |
+| `dev-modality-001` equivalent `dev-indirect-001` | `modality-001`         | duplicate         |
+| `dev-numbers-001`                                | `numbers-001`          | duplicate         |
+| `dev-correction-001`                             | none                   | new               |
+| `dev-context-001`                                | `context-pronoun-001`  | duplicate         |
+| `dev-codeswitch-001`                             | `codeswitch-001`       | duplicate         |
+| `dev-ambiguous-001`                              | `holdout-ambiguity`    | duplicate         |
+| `dev-adversarial-001`                            | `prompt-injection-001` | duplicate         |
+| `dev-tech-001`, `dev-conditional-001`            | `conditional-001`      | partial duplicate |
+| `holdout-commitment-001`                         | `commitment-001`       | duplicate         |
+| `holdout-attribution-001`                        | `attribution-vet-001`  | duplicate         |
+| `holdout-conditional-001`                        | `holdout-boundary`     | duplicate         |
+| `holdout-units-001`                              | `numbers-001`          | duplicate         |
+| `holdout-uncertainty-001`                        | `holdout-possibility`  | duplicate         |
+| `holdout-modality-001`                           | `modality-001`         | duplicate         |
+
+Eleven of the seventeen new cases duplicate frozen cases, and the two
+genuinely new cases are the double negative and the correction. The new set
+is retained as a supplemental set. It is not a second frozen corpus, and it
+must not be tuned against.
+
+### Smallest defensible next qualification plan
+
+1. Do not repeat the model comparison. The arms, the prompt, and the
+   corpora are unchanged, so repeating them would spend money without
+   answering a new question.
+2. Adjudicate the outstanding cases first, in the frozen corpus, with a
+   bilingual reviewer: `attribution-vet-001` and `holdout-ambiguity` need a
+   source ambiguity verdict for both arms, and the three Luna failures
+   need a confirmation that Terra is the arm to qualify.
+3. Then run one bounded translation-only qualification on the captured
+   canonical transcript events, with the production scheduler and adapter,
+   with the request, input, and output ceilings enforced, and with the
+   supplemental set as a reporting surface rather than a pass gate.
+4. Report the critical semantic failures separately from the aggregate
+   similarity. Word error rate against the Indonesian reference is a
+   secondary signal for an English to Indonesian system, not the primary
+   quality measure.
+5. Keep the human comprehension requirement open. Nothing in this plan
+   replaces a bilingual reader.
+
+### Remaining human adjudication requirements
+
+1. `attribution-vet-001` and `holdout-ambiguity`: a source ambiguity
+   verdict for both arms, with the permission rubric applied.
+2. A bilingual reviewer for every committed translation produced by the
+   next qualification, including whether the Indonesian would be understood
+   as the speaker intended.
+3. A decision on whether Terra remains the configured default, given that
+   neither arm has been qualified.
