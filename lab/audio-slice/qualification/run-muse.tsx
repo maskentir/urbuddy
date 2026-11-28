@@ -208,13 +208,25 @@ const segmentEnds = Object.entries(manifest.spans)
 let segmentIndex = 0;
 
 const app = values.headless === true ? undefined : render(<AdaptiveApp controller={controller} />);
+const renderFrame = (): string =>
+  renderToString(
+    React.createElement(AdaptiveScreen, {
+      state: { ...holder.session, atMs: Math.round(performance.now() - startedMonoMs) },
+      size: { columns: 86, rows: 28 },
+    }),
+    { columns: 86 },
+  );
 const rerender = (): void => {
   holder.session = touchLiveView({
     ...holder.session,
     atMs: Math.round(performance.now() - startedMonoMs),
     running: !operation.signal.aborted,
   });
-  app?.rerender(<AdaptiveApp controller={controller} />);
+  if (app === undefined) {
+    renderFrame();
+    return;
+  }
+  app.rerender(<AdaptiveApp controller={controller} />);
 };
 
 const transcription = await runTranscription({
@@ -260,13 +272,6 @@ if (transcription.isErr()) {
   );
   feed.finish();
   await feed.completion();
-  const frame = renderToString(
-    React.createElement(AdaptiveScreen, {
-      state: { ...holder.session, atMs: Math.round(performance.now() - startedMonoMs) },
-      size: { columns: 86, rows: 28 },
-    }),
-    { columns: 86 },
-  );
-  process.stdout.write(`\n${frame}\n`);
+  process.stdout.write(`\n${renderFrame()}\n`);
   finish(0);
 }
