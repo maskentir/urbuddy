@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["scenario.ts", "session.ts", "screen.tsx", "run.tsx", "capture.tsx"]
+}

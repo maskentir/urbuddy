@@ -1,0 +1,26 @@
+[1mUrbuddy · alur tunggal · bukan sesi P01[22m
+[1mIkuti · 04:15 · live[22m
+[90mIkuti arti Indonesia. R membuka bantuan respons. C memulihkan konteks yang terlewat. ?[39m
+[90m bantuan.[39m
+[33mPertanyaan: Amara menanyakan apakah rebuild boleh jalan malam ini. (Belum jelas: Jonas[39m
+[33m atau Priya.) R untuk respons.[39m
+
+[90m02:30 · Jonas · backend engineer[39m
+Kursor ekspor menandai posisi kita. Kita bisa lanjut dari kursor terakhir yang
+tersimpan.
+[36mKata: cursor = penanda posisi halaman ekspor; resume = lanjut dari posisi tersimpan[39m
+[36mMaksud: Jonas proposes resuming from the saved position instead of restarting.[39m
+
+[90m03:10 · Priya · SRE[39m
+API membatasi laju kita. Kita menunggu acak sebelum mencoba lagi.
+[36mKata: throttle = API membatasi laju; backoff with jitter = tunggu acak sebelum mencoba[39m
+[36m lagi[39m
+[36mMaksud: Priya explains the delay is rate-limiting, not missing data.[39m
+
+[90m04:10 · Amara · PM[39m
+Jonas or Priya, can we run the rebuild tonight?
+[90mBelum ada terjemahan.[39m
+
+
+
+[90mSpace putar/jeda · . langkah · C pulihkan · R respons · q keluar[39m
